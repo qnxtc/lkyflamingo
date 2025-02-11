@@ -1,0 +1,2 @@
+#运行abides.py的时候把编辑配置那里改成:(不要带#)
+#-c flamingo -n 128 -i 100 -p 1 -t car_evaluation
