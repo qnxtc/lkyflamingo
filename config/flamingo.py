@@ -246,6 +246,9 @@ secret_scale = 1000000
 ######新增的（时间序列数据加载）#######
 def load_pems_data():
     data = np.load('F:\DATA\pycharm\lkyflamingo\dataset\PEMS04\PEMS04.npz')['data']  # shape: (16992, 307, 3)
+    ##检查加载的数值是否包含nan值##
+    if np.isnan(data).any():
+        print("Warning: Data contains NaN values.")
 
     # 数据标准化
     scaler = StandardScaler()
@@ -259,6 +262,16 @@ def load_pems_data():
     for i in range(len(data) - seq_length - pred_length):
         X.append(scaled_data[i:i + seq_length])
         y.append(scaled_data[i + seq_length:i + seq_length + pred_length, 0])  # 预测流量
+    ####为了检测加载的数据是否包含 nan 值####
+    X = np.array(X)
+    y = np.array(y)
+    print(f"Shape of X: {X.shape}")
+    print(f"Shape of y: {y.shape}")
+    if np.isnan(X).any():
+        print("Warning: X contains NaN values.")
+    if np.isnan(y).any():
+        print("Warning: y contains NaN values.")
+    ####为了检测加载的数据是否包含 nan 值####
 
     return np.array(X), np.array(y), scaler.mean_, scaler.scale_
 
@@ -270,7 +283,10 @@ X_full, y_full, scaler_mean, scaler_scale = load_pems_data()
 X_train, X_test, y_train, y_test = train_test_split(
     X_full, y_full, test_size=0.2, random_state=seed, shuffle=False
 )
-
+####为了在划分训练集和测试集后，检查 X_test 是否包含 nan 值：####
+if np.isnan(X_test).any():
+    print("Warning: X_test contains NaN values.")
+####为了在划分训练集和测试集后，检查 X_test 是否包含 nan 值：####
 # 帮助集（用于模型初始化）
 _, X_help, _, y_help = train_test_split(
     X_test, y_test, test_size=0.1, random_state=seed, shuffle=False

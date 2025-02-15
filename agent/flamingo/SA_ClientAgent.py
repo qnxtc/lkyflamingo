@@ -9,6 +9,17 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
+##为了解决param中findnerighbors找不到的问题##
+from util.param import findNeighbors as findNeighbors
+##为了解决param中root_seed找不到的问题##
+from util.param import root_seed as root_seed
+##为了解决param中fraction找不到的问题##
+from util.param import fraction as fraction
+##为了解决param中nonce找不到的问题##
+from util.param import nonce as nonced
+###为了解决testX的问题###
+from sklearn.impute import SimpleImputer
+
 #下面是原来的
 
 from copy import deepcopy
@@ -40,6 +51,11 @@ from util.crypto.secretsharing import secret_int_to_points
 class TrafficLSTM(nn.Module):
     def __init__(self, input_size=3, hidden_size=64, num_layers=2, output_size=3):
         super().__init__()
+        # 保存 input_size 为类的属性
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.output_size = output_size
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
@@ -72,24 +88,59 @@ class SA_ClientAgent(Agent):
                  y_train=None,
                  input_length=1024,
                  classes=None,
-                 nk=10,
+                 #nk=10,
                  c=100,
-                 m=16):
+                 m=16,
+                 testX=None,
+                 scaler=None):
 
         # Base class init
         super().__init__(id, name, type, random_state)
+        # ######新增的版1####
+        # def __init__(self, *args, **kwargs):
+        #     super().__init__(*args, **kwargs)
+        #     # 确保所有客户端使用相同的模型结构
+        #     self.model = TrafficLSTM(
+        #         input_size=3,  # 特征维度
+        #         hidden_size=64,
+        #         num_layers=2,
+        #         output_size=3  # 预测长度
+        #     )
+        # ######新增的版1####
+        ######新增的版2#####
+        # # 确保 testX 是二维数组
+        # if testX is not None:
+        #     testX = np.array(testX)
+        #     if testX.ndim == 1:
+        #         testX = testX.reshape(-1, 1)  # 如果是一维数组，转换为二维数组
+        #     if np.isnan(testX).any():
+        #         print("Warning: testX contains NaN values.")
+        #     # 可以选择对 NaN 进行处理，例如填充为 0
+        #         testX = np.nan_to_num(testX)
+        #######新增的版2#######
+
+        # 确保所有客户端使用相同的模型结构
+        self.model = TrafficLSTM(
+            input_size=3,  # 特征维度
+            hidden_size=64,
+            num_layers=2,
+            output_size=3  # 预测长度
+        )
+        ######新增的#####
+
 
         # Iteration counter
         self.no_of_iterations = iterations
         self.current_iteration = 1
         self.current_base = 0
-
-        # MLP inputs
-        self.classes = classes
-        self.nk = nk
-        if (self.nk < len(self.classes)) or (self.nk >= X_train.shape[0]):
-            print("nk is a bad size")
-            exit(0)
+        ########原来的####
+        # # MLP inputs
+        # self.classes = classes
+        # self.nk = nk
+        # if (self.nk < len(self.classes)) or (self.nk >= X_train.shape[0]):
+        #     print("nk is a bad size")
+        #     exit(0)
+        ########原来的####
         # classes 是分类任务中的类别标签。
         # nk 表示每次训练时所使用的本地数据量。
         # 代码会检查 nk 是否有效（即，nk 小于类别数量且小于训练数据的行数）。
@@ -109,11 +160,26 @@ class SA_ClientAgent(Agent):
         self.global_loss_curve = None
         self.c = c
         self.m = m
+        ###########新增的########
+        self.model = TrafficLSTM(
+            input_size=3,  # 特征维度
+            hidden_size=64,
+            num_layers=2,
+            output_size=3  # 预测长度
+        )
+        # 初始化优化器
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)  # 可以根据需要调整学习率
+        # 初始化损失函数
+        self.criterion = nn.MSELoss()
+
+        ###########新增的########
+
 
         # pick local training data
         self.prng = np.random.Generator(np.random.SFC64())
-        obv_per_iter = self.nk  # math.floor(X_train.shape[0]/self.num_clients)
-############原有的##############
+        ############原有的##############
+        #obv_per_iter = self.nk  # math.floor(X_train.shape[0]/self.num_clients)
+
         # self.trainX = [np.empty((obv_per_iter, X_train.shape[1]), dtype=X_train.dtype) for i in
         #                range(self.no_of_iterations)]
         # self.trainY = [np.empty((obv_per_iter,), dtype=X_train.dtype) for i in range(self.no_of_iterations)]
@@ -124,6 +190,27 @@ class SA_ClientAgent(Agent):
         self.seq_length = 12  # 输入序列长度
         self.pred_length = 3  # 预测长度
         self.feature_size = 3  # PEMS-04特征维度
+        ####新增的版1####
+        self.testX = testX  # 初始化 self.testX
+        #
+        # imputer = SimpleImputer(strategy='mean')  # 或使用'mean', 'median', 或'most_frequent'
+        # self.testX = imputer.fit_transform(self.testX)
+        # if isinstance(self.testX, np.ndarray) and self.testX.dtype.kind in ['f', 'c']:  # 检查是否为浮动类型
+        #     if np.isnan(self.testX).any():
+        #         print(f"Warning: self.testX in ClientAgent {id} contains NaN values.")
+        # if self.testX.ndim == 1:
+        #     self.testX = self.testX.reshape(-1, 1)
+        # print(self.testX)
+
+        # 处理NaN值的代码
+        # self.testX = np.array(X_test)  # 确保 self.testX 是 numpy 数组
+        # ####检查self.testX是否包含 nan 值：####
+        # if np.isnan(self.testX).any():
+        #     print(f"Warning: self.testX in ClientAgent {id} contains NaN values.")
+        #
+        # ####检查self.testX是否包含 nan 值：####
+
+        self.scaler = scaler
 
         # 加载PEMS-04数据
         raw_data = np.load("F:\DATA\pycharm\lkyflamingo\dataset\PEMS04\PEMS04.npz")['data']  # shape: (16992, 307, 3)
@@ -318,6 +405,19 @@ class SA_ClientAgent(Agent):
         # End of the protocol / start the next iteration
         # Receiving the output from the server
         elif msg.body['msg'] == "REQ" and self.current_iteration != 0:
+            # ###说找不到服务器接收的weight###
+            # print(f"Received global weights from server: {msg.body['global_weights']}")
+            # print(f"Message body: {msg.body}")  # 输出消息体内容
+            # weights = msg.body.get('weights')
+            # if weights is None:
+            #     print(f"Warning: 'weights' key not found in message body. Client ID: {self.id}")
+            #     return  # 或者进行其他错误处理
+            # ptr = 0
+            # for param in self.model.parameters():
+            #     size = param.numel()
+            #     param.data.copy_(torch.from_numpy(weights[ptr:ptr + size].reshape(param.shape)))
+            #     ptr += size
+            # ###说找不到服务器接收的weight###
             start = time.time()
             #####新增的########
             # 获取全局参数并加载到模型
@@ -326,9 +426,9 @@ class SA_ClientAgent(Agent):
             # 反量化参数
             float_vec = (global_vec / (2 ** self.m)) - self.c
             #####新增的########
-            PRO = msg.body['PRO']
+            # PRO = msg.body['PRO']
             final_sum = msg.body['final_sum']
-            self.verify_result(PRO, final_sum)
+            # self.verify_result(PRO, final_sum)
 
             end = time.time()
             start_time = msg.body['start_time']
@@ -353,11 +453,24 @@ class SA_ClientAgent(Agent):
             ptr = 0
             state_dict = self.model.state_dict()
             new_weights = {}
+            # #######查msg.body字典里的内容####
+            # print(f"msg.body keys: {msg.body.keys()}")
+            # print(f"msg.body content: {msg.body}")
+            # #######查msg.body字典里的内容####
             for name, param in state_dict.items():
                 size = param.numel()
+                # #######避免程序因 KeyError 异常而崩溃，同时可以记录详细的错误信息####
+                # try:
+                ####原来的####
+                # new_weights[name] = torch.FloatTensor(
+                #     msg.body['weights'][ptr:ptr + size].reshape(param.shape))
+                ####原来的###
                 new_weights[name] = torch.FloatTensor(
-                    msg.body['weights'][ptr:ptr + size].reshape(param.shape)
+                    float_vec[ptr:ptr + size].reshape(param.shape)
                 )
+                # except KeyError as e:
+                #     print(f"KeyError occurred: {e}. msg.body: {msg.body}")
+                #######避免程序因 KeyError 异常而崩溃，同时可以记录详细的错误信息####
                 ptr += size
             self.global_weights = new_weights
 
@@ -461,6 +574,8 @@ class SA_ClientAgent(Agent):
         #########原来的########
         #########新增的########
         self.model.train()
+        scaler_mean = self.scaler.mean_
+        scaler_scale = self.scaler.scale_
 
         # ================== 1. 从类属性中获取当前迭代数据 ==================
         current_iter_idx = self.current_iteration - 1
@@ -511,6 +626,8 @@ class SA_ClientAgent(Agent):
 
         # 后续的加密和发送逻辑保持不变...
         vec = np.vectorize(lambda d: (d + self.c) * pow(2, self.m))(float_vec).astype(self.vector_dtype)
+        # 这个可以查看客户端发送的向量长度
+        # print(f"Client {self.id} vector length: {len(vec)}")  # 输出向量长度
         self.vector_len = len(vec)  # 动态调整向量长度
 
         #########新增的########
@@ -524,7 +641,18 @@ class SA_ClientAgent(Agent):
         self.vec_n = deepcopy(vec)
 
         # Find this client's neighbors: parse graph from PRG(PRF(iter, root_seed))
-        self.neighbors_list = param.findNeighbors(param.root_seed, self.current_iteration, self.num_clients, self.id,
+
+        # ###检查一下参数值和类型####
+        # print(f"root_seed: {param.root_seed}, type: {type(param.root_seed)}")
+        # print(f"current_iteration: {self.current_iteration}, type: {type(self.current_iteration)}")
+        # print(f"num_clients: {self.num_clients}, type: {type(self.num_clients)}")
+        # print(f"id: {self.id}, type: {type(self.id)}")
+        # print(f"neighborhood_size: {self.neighborhood_size}, type: {type(self.neighborhood_size)}")
+        # ###检查一下参数值和类型####
+
+        # self.neighbors_list = param.findNeighbors(param.root_seed, self.current_iteration, self.num_clients, self.id,
+        #                                           self.neighborhood_size)
+        self.neighbors_list = findNeighbors(root_seed, self.current_iteration, self.num_clients, self.id,
                                                   self.neighborhood_size)
         if __debug__:
             self.logger.info("client indices in neighbors list starts from 0")
@@ -548,8 +676,11 @@ class SA_ClientAgent(Agent):
         mi_bytes = get_random_bytes(self.key_length)
         mi_number = int.from_bytes(mi_bytes, 'big')
 
+        # mi_shares = secret_int_to_points(secret_int=mi_number,
+        #                                  point_threshold=int(param.fraction * len(self.user_committee)),
+        #                                  num_points=len(self.user_committee), prime=self.prime)
         mi_shares = secret_int_to_points(secret_int=mi_number,
-                                         point_threshold=int(param.fraction * len(self.user_committee)),
+                                         point_threshold=int(fraction * len(self.user_committee)),
                                          num_points=len(self.user_committee), prime=self.prime)
 
         committee_pubkeys = {}
@@ -585,7 +716,8 @@ class SA_ClientAgent(Agent):
 
         # Compute mask, compute masked vector
         # PRG individual mask
-        prg_mi_holder = ChaCha20.new(key=mi_bytes, nonce=param.nonce)
+        # prg_mi_holder = ChaCha20.new(key=mi_bytes, nonce=param.nonce)
+        prg_mi_holder = ChaCha20.new(key=mi_bytes, nonce=nonced)
         data = b"secr" * self.vector_len
         prg_mi = prg_mi_holder.encrypt(data)
 
@@ -614,7 +746,8 @@ class SA_ClientAgent(Agent):
         for id in self.neighbors_list:
             round_number_bytes = self.current_iteration.to_bytes(16, 'big')
 
-            h_ijt = ChaCha20.new(key=neighbor_pairwise_secret_bytes[id], nonce=param.nonce).encrypt(round_number_bytes)
+            # h_ijt = ChaCha20.new(key=neighbor_pairwise_secret_bytes[id], nonce=param.nonce).encrypt(round_number_bytes)
+            h_ijt = ChaCha20.new(key=neighbor_pairwise_secret_bytes[id], nonce=nonced).encrypt(round_number_bytes)
             h_ijt = str(int.from_bytes(h_ijt[0:4], 'big') & 0xFFFF)
 
             # map h_ijt to a group element
@@ -634,7 +767,8 @@ class SA_ClientAgent(Agent):
 
         prg_pairwise = {}
         for id in self.neighbors_list:
-            prg_pairwise_holder = ChaCha20.new(key=neighbor_pairwise_mask_seed_bytes[id], nonce=param.nonce)
+            # prg_pairwise_holder = ChaCha20.new(key=neighbor_pairwise_mask_seed_bytes[id], nonce=param.nonce)
+            prg_pairwise_holder = ChaCha20.new(key=neighbor_pairwise_mask_seed_bytes[id], nonce=nonced)
             data = b"secr" * self.vector_len
             prg_pairwise[id] = prg_pairwise_holder.encrypt(data)
 
@@ -717,7 +851,9 @@ class SA_ClientAgent(Agent):
                                       "hidden_size": self.model.hidden_size,
                                       "num_layers" : self.model.num_layers,
                                       "output_size": self.model.output_size
-                                  }
+                                  },
+                                  "scaler_mean" : scaler_mean,
+                                  "scaler_scale": scaler_scale
                                   }),
                          tag="comm_key_generation")
         ############新增的###############
@@ -915,4 +1051,28 @@ class SA_ClientAgent(Agent):
 
         mae = np.mean(np.abs(preds - true))
         print(f"Client {self.id} MAE: {mae:.2f}")
+
+        ######检查 self.testX 的形状和值：######
+        print(f"Shape of self.testX: {self.testX.shape if self.testX is not None else None}")
+        print(f"Value of self.testX: {self.testX}")
+        ####新增的版1#####
+        # if self.testX is not None:
+        #     try:
+        #         test_X = torch.FloatTensor(self.scaler.transform(self.testX))
+        #     except ValueError as e:
+        #         print(f"Error during transformation: {e}")
+        #         print(f"self.testX value: {self.testX}")
+        # else:
+        #     print("self.testX is None.")
+        ####新增的版1#####
+
+        if self.testX is not None:
+            if np.isnan(self.testX).any():
+                print("Warning: self.testX contains NaN values.")
+            try:
+                test_X = torch.FloatTensor(self.scaler.transform(self.testX))
+            except ValueError as e:
+                print(f"Error during transformation: {e}")
+        else:
+            print("self.testX is None.")
         ############新增的#############

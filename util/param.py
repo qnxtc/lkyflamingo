@@ -39,6 +39,7 @@ wt_google_recontruction = pd.Timedelta('2s')
 # this should be a random seed from beacon service;
 # we use a fixed one for simplicity
 root_seed = get_random_bytes(32)
+# root_seed = b'\x12\xab\x34\xcd\x56\xef\x78\x90\xab\xcd\xef\x12\x34\x56\x78\x90\xab\xcd\xef\x12\x34\x56\x78\x90\xab\xcd\xef\x12\x34\x56\x78\x90'
 nonce = b'\x00\x00\x00\x00\x00\x00\x00\x00'
 # 信标服务这里提到了
 # root_seed：根种子，用于生成随机数。注释提醒这个种子应该来自信标服务，但为了简单起见，这里使用 get_random_bytes(32) 生成一个 32 字节的随机种子。

@@ -27,7 +27,9 @@ from message.Message import Message
 # other user-level crypto functions
 from util import param
 ##为了解决param.nonce标红的问题所以加了这一句##
-from util.param import nonce as nonc
+from util.param import nonce as noncd
+##为了解决wt_flamingo_report找不到的问题所以加了这一句，因为nn里有个Parameter，系统把我们的param误认了##
+from util.param import wt_flamingo_report as wt_flamingo_report
 ###############################################
 from util.DiffieHellman import DHKeyExchange, mod_args
 from util.crypto import ecchash
@@ -51,7 +53,12 @@ def parallel_mult(vec, coeff):
 class TrafficLSTM(nn.Module):
     def __init__(self, input_size=3, hidden_size=64, num_layers=2, output_size=3):
         super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        # 保存属性
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.output_size = output_size
+        self.lstm = nn.LSTM(input_size = input_size, hidden_size= hidden_size, num_layers = num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
@@ -62,7 +69,7 @@ class TrafficLSTM(nn.Module):
 # PPFL_ServiceAgent class inherits from the base Agent class.
 class SA_ServiceAgent(Agent):
 
-    def __init__(self, id, name, type,
+    def __init__(self, id, name, type,scaler_mean,scaler_scale,
                  random_state=None,
                  msg_fwd_delay=1000000,
                  round_time=pd.Timedelta("10s"),
@@ -72,6 +79,7 @@ class SA_ServiceAgent(Agent):
                  parallel_mode=1,
                  debug_mode=0,
                  users={},
+
                  # inputs for MLP
                  input_length=1024,
                  classes=None,
@@ -86,6 +94,16 @@ class SA_ServiceAgent(Agent):
 
         # Base class init.
         super().__init__(id, name, type, random_state)
+        #########新增的#####
+        self.c = c  # 初始化 self.c
+        self.m = m  # 初始化 self.m
+        self.X_test = X_test  # 初始化 self.X_test
+        self.y_test = y_test  # 初始化 self.y_test
+
+        # 整合第二个 __init__ 方法中的代码
+        self.vector_len = None  # 初始化为 None
+
+        #########新增的#####
 
         #############原来的##########
         # # MLP inputs
@@ -123,6 +141,7 @@ class SA_ServiceAgent(Agent):
         self.scaler_mean = None
         self.scaler_scale = None
         self.test_sequences = None  # 存储测试序列
+
         #############新增的##########
 
 
@@ -143,7 +162,8 @@ class SA_ServiceAgent(Agent):
         # inputs
         # 原来的self.vector_len = input_length  # param.vector_len
         # 新增的
-        self.vector_len = 256 * 256  # 示例值，需根据实际模型计算
+        #self.vector_len = 256 * 256  # 示例值，需根据实际模型计算
+        self.vector_len = None
         # 新增的
         self.vector_dtype = param.vector_type
 
@@ -211,7 +231,13 @@ class SA_ServiceAgent(Agent):
         self.dec_target_pairwise = {}
         self.dec_target_mi = {}
 
-        self.vec_sum_partial = np.zeros(self.vector_len, dtype=self.vector_dtype)
+        ####原来的#####
+        #self.vec_sum_partial = np.zeros(self.vector_len, dtype=self.vector_dtype)
+        ####原来的#####
+
+        ####新增的####
+        self.vec_sum_partial = None
+        ####新增的####
 
         # Track the current iteration and round of the protocol.
         self.current_iteration = 1
@@ -235,6 +261,15 @@ class SA_ServiceAgent(Agent):
         ##########################################################
         # 创建一个用于 Diffie-Hellman 密钥交换的对象。
         self.dh_key_obj = DHKeyExchange(mod_args.q, mod_args.g)
+
+
+    #######新增的######
+    #当接收到第一个客户端的向量时，动态设置 self.vector_len，并且后续不再检查向量长度是否一致，而是以第一个向量的长度为准。
+    # def __init__(self, *args, **kwargs):
+    #     super().__init__(*args, **kwargs)
+    #     self.vector_len = None  # 初始化为 None
+    #######新增的######
+
 
     # Simulation lifecycle messages.
 
@@ -290,6 +325,17 @@ class SA_ServiceAgent(Agent):
         # Get the sender's id (should be client id)
         sender_id = msg.body['sender']
 
+        ######新增的##########
+        try:
+            if self.scaler_mean is None:
+                self.scaler_mean = msg.body['scaler_mean']
+                self.scaler_scale = msg.body['scaler_scale']
+        except KeyError:
+            print(f"Warning: 'scaler_mean' or 'scaler_scale' key not found in the message from client {sender_id}.")
+            self.scaler_mean = None
+            self.scaler_scale = None
+        #####新增的##########
+
         """Collect messages from clients.
         Three types: 
             VECTOR message meant for report step, 
@@ -305,6 +351,19 @@ class SA_ServiceAgent(Agent):
             self.scaler_mean = msg.body['scaler_mean']
             self.scaler_scale = msg.body['scaler_scale']
         if msg.body['msg'] == "VECTOR":
+            sender_id = msg.body['sender']
+            ####新增的####
+            vector = msg.body['vector']
+            # 这个可以看服务器接收的客户端向量长度
+            # print(f"Server received vector from client {sender_id} of length {len(vector)}")
+            ####新增的####
+            # if not hasattr(self, 'vector_len'):
+            #     self.vector_len = len(msg.body['vector'])
+            if self.vector_len is None:
+                self.vector_len = len(msg.body['vector'])
+                # 动态设置 self.vec_sum_partial 的长度
+                self.vec_sum_partial = np.zeros(self.vector_len, dtype=self.vector_dtype)
+                print(f"Server set vector length to {self.vector_len}")
             # 新增模型结构校验
             client_config = msg.body.get('model_config', None)
             if not self.check_model_config(client_config):
@@ -332,10 +391,13 @@ class SA_ServiceAgent(Agent):
                 self.recv_user_vectors[sender_id] = msg.body['vector']
                 if __debug__:
                     self.logger.info(f"Server received vector from client {sender_id - 1} at {currentTime}")
+
+                #####原来的#####
                 # ML parameters
-                self.final_layers = msg.body['layers']
-                self.final_outputs = msg.body['out']
-                self.final_iter = msg.body['iter']
+                # self.final_layers = msg.body['layers']
+                # self.final_outputs = msg.body['out']
+                # self.final_iter = msg.body['iter']
+                #####原来的#####
 
                 # parse the cipher for pairwise and mi
                 cur_clt_pairwise_cipher = msg.body['enc_pairwise']
@@ -440,6 +502,30 @@ class SA_ServiceAgent(Agent):
         self.recv_user_vectors = {}
 
         print("[Server] number of collected vectors:", len(self.user_vectors))
+
+    ######新增的####
+        # 这个可以看客户端介绍到的服务器向量长度
+        # for id, vector in self.user_vectors.items():
+        #     print(f"Client {id} vector length received by server: {len(vector)}")  # 输出接收到的向量长度
+        #     if len(vector) != self.vector_len:
+        #         print(f"WARNING: Client {id} sent a vector of length {len(vector)}, expected {self.vector_len}")
+
+        self.ids = list()
+        for id in self.user_vectors:
+            if len(self.user_vectors[id]) != self.vector_len:
+                raise RuntimeError("Client sends inconsistent vector length")
+            self.vec_sum_partial += self.user_vectors[id]
+            self.ids.append(id)
+        print(f"client_id={self.ids}")
+        # 移除向量长度检查
+        self.vec_sum_partial = np.zeros(self.vector_len, dtype=self.vector_dtype)
+        self.ids = list()
+        for id in self.user_vectors:
+            self.vec_sum_partial += self.user_vectors[id]
+            self.ids.append(id)
+        print(f"client_id={self.ids}")
+    ######新增的####
+
 
         # for each client, a list of encrypted mi shares (#shares = #commmittee members)
         self.mi_cipher = self.recv_mi_cipher
@@ -675,7 +761,7 @@ class SA_ServiceAgent(Agent):
         for i in range(len(sum_df)):
             #原来：prg_mi_holder = ChaCha20.new(key=sum_df[0][i], nonce=param.nonce)
             #为了解决nonce=param.nonce中，parameter标红的问题，所以有了下面：
-            prg_mi_holder = ChaCha20.new(key=sum_df[0][i], nonce=nonc)
+            prg_mi_holder = ChaCha20.new(key=sum_df[0][i], nonce=noncd)
             data = b"secr" * self.vector_len
             prg_mi[i] = prg_mi_holder.encrypt(data)
             mi_vec = mi_vec - np.frombuffer(prg_mi[i], dtype=self.vector_dtype)
@@ -745,7 +831,7 @@ class SA_ServiceAgent(Agent):
             for i in range(len(sum_df)):
                 #原来的，但是param被标红了，所以像前面一样做了修改
                 # prg_pairwise_holder = ChaCha20.new(key=sum_df[0][i], nonce=param.nonce)
-                prg_pairwise_holder = ChaCha20.new(key=sum_df[0][i], nonce=nonc)
+                prg_pairwise_holder = ChaCha20.new(key=sum_df[0][i], nonce=noncd)
                 data = b"secr" * self.vector_len
                 prg_pairwise[i] = prg_pairwise_holder.encrypt(data)
 
@@ -835,7 +921,11 @@ class SA_ServiceAgent(Agent):
         #####新增的############
         # ================= LSTM参数重构 =================
         # 反量化参数
-        float_vec = (final_sum / (2 ** self.m)) - self.c
+        if not hasattr(self, 'm'):
+            print("Error: self.m is not initialized.")
+        else:
+            float_vec = (final_sum / (2 ** self.m)) - self.c
+        # float_vec = (final_sum / (2 ** self.m)) - self.c
 
         # 重构模型参数
         state_dict = {}
@@ -853,12 +943,13 @@ class SA_ServiceAgent(Agent):
 
         ###############################################
         start_time = time.time()
-        # all_clients_pro = self.kernel.verify()
-        line_clients_pro = self.kernel.again_verify(self.ids)
-        # PRO = np.sum([list(line_clients_pro.values()),], axis=1).reshape(80000,)
-        PRO = np.zeros(self.vector_len, dtype="uint32")
-        for i in line_clients_pro:
-            PRO += i
+        #########################原来的验证部分，我们先不验证了
+        # # all_clients_pro = self.kernel.verify()
+        # line_clients_pro = self.kernel.again_verify(self.ids)
+        # # PRO = np.sum([list(line_clients_pro.values()),], axis=1).reshape(80000,)
+        # PRO = np.zeros(self.vector_len, dtype="uint32")
+        # for i in line_clients_pro:
+        #     PRO += i
 
         #########原来的#########
         #self.SCORE = mlp.score(self.X_test, self.y_test)
@@ -945,7 +1036,10 @@ class SA_ServiceAgent(Agent):
         #########原来的#########
 
         #########新增的#########
-        self.kernel.finish_score(self.MAE, PRO.nbytes, self.current_iteration, finished_iteration)
+        #self.kernel.finish_score(self.MAE, PRO.nbytes, self.current_iteration, finished_iteration)
+        #self.kernel.finish_score(self.MAE, self.current_iteration, finished_iteration)
+        self.kernel.finish_score(self.MAE, self.RMSE,self.current_iteration, finished_iteration)
+
         print(f"[Server] MAE: {self.MAE:.2f}, RMSE: {self.RMSE:.2f}")
         #########新增的#########
 
@@ -993,19 +1087,33 @@ class SA_ServiceAgent(Agent):
             quantized_vec = (vec + self.c) * (2 ** self.m)
             quantized_vec = quantized_vec.astype(self.vector_dtype)
 
+            # self.sendMessage(id,
+            #                  Message({"msg"           : "REQ",
+            #                           "sender": 0,
+            #                           "output"    : 1,
+            #                           "PRO"       : PRO,
+            #                           "final_sum" : final_sum_n,
+            #                           "client_ids": self.ids,
+            #                           "start_time": start_time,
+            #                           "global_weights": quantized_vec,
+            #                           "model_config"  : self.global_model_config,
+            #                           "metrics"       : {"mae": mae, "rmse": rmse},
+            #                           # ...其他必要字段...
+            #                           }),
             self.sendMessage(id,
                              Message({"msg"           : "REQ",
-                                      "sender": 0,
-                                      "output"    : 1,
-                                      "PRO"       : PRO,
-                                      "final_sum" : final_sum_n,
-                                      "client_ids": self.ids,
-                                      "start_time": start_time,
+                                      "sender"        : 0,
+                                      "output"        : 1,
+                                      # "PRO"           : PRO,
+                                      "final_sum"     : final_sum_n,
+                                      "client_ids"    : self.ids,
+                                      "start_time"    : start_time,
                                       "global_weights": quantized_vec,
                                       "model_config"  : self.global_model_config,
                                       "metrics"       : {"mae": mae, "rmse": rmse},
                                       # ...其他必要字段...
                                       }),
+
             ##########新增的###########
                                     tag="comm_output_server")
         self.current_round = 1
@@ -1015,7 +1123,8 @@ class SA_ServiceAgent(Agent):
         if (self.current_iteration > self.no_of_iterations):
             return
 
-        self.setWakeup(currentTime + server_comp_delay + param.wt_flamingo_report)
+        # self.setWakeup(currentTime + server_comp_delay + param.wt_flamingo_report)
+        self.setWakeup(currentTime + server_comp_delay + wt_flamingo_report)
 
     # ======================== UTIL ========================
 
