@@ -34,20 +34,54 @@ class SA_ClientAgent(Agent):
     # num of iterations = 4
     # key length = 32 bytes
     # neighbors ~ 2 * log(num per iter) 
-    def __init__(self, id, name, type,
+    def __init__(self, id, name, type, X_train, y_train, client_data_idx,
                  iterations=4,
                  key_length=32,
                  num_clients=128,
                  neighborhood_size=1,
                  debug_mode=0,
                  random_state=None,
-                 X_train=None,
-                 y_train=None,
+                 # X_train=None,
+                 # y_train=None,
                  input_length=1024,
                  classes=None,
+                 X_test=None,
+                 y_test=None,
+                 # client_data_idx=None,####新增的####
                  nk=10,
                  c=100,
                  m=16):
+        ####新增测试用的###
+        # 检查索引是否越界
+        if max(client_data_idx) >= len(X_train):
+            raise ValueError(f"Index {max(client_data_idx)} is out of bounds for X_train of size {len(X_train)}")
+        # print(f"X_train shape inside ClientAgent __init__: {X_train.shape}")
+        # # 其他初始化代码...
+        # if client_data_idx is not None:
+        #     if max(client_data_idx) >= len(X_train):
+        #         raise ValueError(f"Index {max(client_data_idx)} is out of bounds for X_train of size {len(X_train)}")
+                ####新增的####
+        # 从全局数据中获取该客户端的索引
+        self.trainX = X_train[client_data_idx]
+        self.trainY = y_train[client_data_idx]
+
+        # 检查 X_test 是否为 None 或者是否为二维数组
+        if X_test is not None and len(X_test.shape) != 2:
+            # 如果 X_test 是一维数组，尝试将其转换为二维数组
+            if len(X_test.shape) == 1:
+                X_test = X_test.reshape(-1, 1)
+            else:
+                raise ValueError("X_test must be a 2D array.")
+
+        self.X_test =X_test # 初始化 X_test 属性
+        self.y_test =y_test # 初始化 y_test 属性
+
+                ####新增的####
+
+        ####新增测试用的###
+
+
+
 
         # Base class init
         super().__init__(id, name, type, random_state)
@@ -81,35 +115,39 @@ class SA_ClientAgent(Agent):
         self.prng = np.random.Generator(np.random.SFC64())
         obv_per_iter = self.nk  # math.floor(X_train.shape[0]/self.num_clients)
 
-        self.trainX = [np.empty((obv_per_iter, X_train.shape[1]), dtype=X_train.dtype) for i in
-                       range(self.no_of_iterations)]
-        self.trainY = [np.empty((obv_per_iter,), dtype=X_train.dtype) for i in range(self.no_of_iterations)]
 
-        for i in range(self.no_of_iterations):
-            # self.input.append(self.prng.integer(input_range));
-            slice = self.prng.choice(range(X_train.shape[0]), size=obv_per_iter, replace=False)
-            perm = self.prng.permutation(range(X_train.shape[0]))
-            p = 0
-            while (len(set(y_train[slice])) < len(self.classes)):
-                if p >= X_train.shape[0]:
-                    print("Dataset does not have the # classes it claims")
-                    exit(0)
-                add = [perm[p]]
-                merge = np.concatenate((slice, add))
-                if (len(set(y_train[merge])) > len(set(y_train[slice]))):
-                    u, c = np.unique(y_train[slice], return_counts=True)
-                    dup = u[c > 1]
-                    rm = np.where(y_train[slice] == dup[0])[0][0]
-                    slice = np.concatenate((add, np.delete(slice, rm)))
-                p += 1
+####原有的####
+        # self.trainX = [np.empty ((obv_per_iter, X_train.shape[1]), dtype=X_train.dtype) for i in
+        #                range(self.no_of_iterations)]
+        # self.trainY = [np.empty((obv_per_iter,), dtype=X_train.dtype) for i in range(self.no_of_iterations)]
 
-            if (slice.size != obv_per_iter):
-                print("n_k not going to be consistent")
-                exit(0)
+        # for i in range(self.no_of_iterations):
+        #     # self.input.append(self.prng.integer(input_range));
+        #     slice = self.prng.choice(range(X_train.shape[0]), size=obv_per_iter, replace=False)
+        #     perm = self.prng.permutation(range(X_train.shape[0]))
+        #     p = 0
+        #     while (len(set(y_train[slice])) < len(self.classes)):
+        #         if p >= X_train.shape[0]:
+        #             print("Dataset does not have the # classes it claims")
+        #             exit(0)
+        #         add = [perm[p]]
+        #         merge = np.concatenate((slice, add))
+        #         if (len(set(y_train[merge])) > len(set(y_train[slice]))):
+        #             u, c = np.unique(y_train[slice], return_counts=True)
+        #             dup = u[c > 1]
+        #             rm = np.where(y_train[slice] == dup[0])[0][0]
+        #             slice = np.concatenate((add, np.delete(slice, rm)))
+        #         p += 1
+        #
+        #     if (slice.size != obv_per_iter):
+        #         print("n_k not going to be consistent")
+        #         exit(0)
+        #
+        #     # Pull together the current local training set.
+        #     self.trainX.append(X_train[slice].copy())
+        #     self.trainY.append(y_train[slice].copy())
+        ####原有的####
 
-            # Pull together the current local training set.
-            self.trainX.append(X_train[slice].copy())
-            self.trainY.append(y_train[slice].copy())
 
         # Set logger
         self.logger = logging.getLogger("Log")
@@ -317,8 +355,18 @@ class SA_ClientAgent(Agent):
             mlp.out_activation_ = "softmax"
 
         # num epochs
+        ###原来的###
+        # for j in range(5):
+        #     mlp.partial_fit(self.trainX[self.no_of_iterations], self.trainY[self.no_of_iterations], self.classes)
+        ###原来的###
+        ###新增的###
         for j in range(5):
-            mlp.partial_fit(self.trainX[self.no_of_iterations], self.trainY[self.no_of_iterations], self.classes)
+            mlp.partial_fit(self.trainX, self.trainY, self.classes)
+
+        # 保存训练好的模型为 local_model 属性
+        self.local_model = mlp
+        ###新增的###
+
         padding = self.vector_len - 7 - ((mlp.n_layers_ - 1) * 3)  # - mlp.n_iter_
         for z in range(mlp.n_layers_ - 1):
             padding = padding - mlp.coefs_[z].size

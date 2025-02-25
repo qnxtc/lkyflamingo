@@ -23,6 +23,9 @@ from agent.flamingo.SA_ServiceAgent import SA_ServiceAgent as ServiceAgent
 from model.LatencyModel import LatencyModel
 from util import param
 from util import util
+####新增的###
+from torch.utils.data import Subset
+
 
 parser = argparse.ArgumentParser(description='Detailed options for PPFL config.')
 parser.add_argument('-a', '--clear_learning', action='store_true',
@@ -66,12 +69,27 @@ parser.add_argument('-fd', '--d_final_sum', action="store_true",
                     help='save final sum decode data')
 parser.add_argument('-fe', '--e_final_sum', action="store_true",
                     help='save final sum encode data')
+####新增的###
+parser.add_argument('--non_iid', type=str, default='dirichlet', choices=['iid', 'dirichlet', 'pathological'],
+                    help='Data partition method (IID, Dirichlet, or Pathological)')
+parser.add_argument('--dir_alpha', type=float, default=0.1,
+                    help='Alpha parameter for Dirichlet distribution (smaller means more heterogeneous)')
+parser.add_argument('--patho_classes', type=int, default=2,
+                    help='Number of classes per client in pathological non-IID')
+####新增的###
+
+
 
 args, remaining_args = parser.parse_known_args()
 
 if args.config_help:
     parser.print_help()
     exit()
+
+
+
+
+
 
 # Historical date to simulate.  Required even if not relevant.
 historical_date = pd.to_datetime('2023-01-01')
@@ -183,10 +201,55 @@ secret_scale = 1000000
 #   the data into the structures expected by the PPFL clients.  For example:
 #   X_train, X_test, y_train, y_test = train_test_split(X_data, y_data, test_size=0.25, random_state = shuffle_seed)
 #   12345
+
+#####新增的#####
+
+# 新增函数：基于Dirichlet分布的Non-IID划分
+def dirichlet_split(labels, num_clients, alpha=0.5):
+    num_classes = len(np.unique(labels))
+    client_samples = [[] for _ in range(num_clients)]
+
+    for class_id in range(num_classes):
+        idx = np.where(labels == class_id)[0]
+        np.random.shuffle(idx)
+        proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
+        proportions = (proportions * len(idx)).astype(int)
+        split_points = np.cumsum(proportions)[:-1]
+        splits = np.split(idx, split_points)
+
+        for client_id in range(num_clients):
+            if len(splits) > client_id:
+                client_samples[client_id].extend(splits[client_id].tolist())
+
+    return client_samples
+
+
+# 新增函数：极端标签划分（每个客户端仅有2类）
+def pathological_split(labels, num_clients, num_classes_per_client=2):
+    num_classes = len(np.unique(labels))
+    client_indices = [[] for _ in range(num_clients)]
+
+    for client_id in range(num_clients):
+        selected_classes = np.random.choice(num_classes, num_classes_per_client, replace=False)
+        for class_id in selected_classes:
+            idx = np.where(labels == class_id)[0]
+            np.random.shuffle(idx)
+            client_indices[client_id].extend(idx[:len(idx) // num_clients].tolist())
+
+    return client_indices
+
+#####新增的#####
+
+
+
+
+# 修改后的数据加载与划分逻辑
 X_input, y_input = fetch_data(dataset, local_cache_dir="dataset", return_X_y=True)
 scaler = StandardScaler()
 scaler.fit(X_input)
 X_input = scaler.transform(X_input)
+# 修改后的数据加载与划分逻辑
+
 
 if args.vector_length:
     input_length = args.vector_length
@@ -195,9 +258,41 @@ else:
 
 print("input length: ", input_length)
 
+# 划分全局测试集
 X_train, X_test, y_train, y_test = train_test_split(X_input, y_input, \
                                                     test_size=0.25, \
                                                     random_state=seed)
+# 划分全局测试集
+
+
+
+#####新增的###
+# Non-IID划分逻辑
+if args.non_iid == 'dirichlet':
+    split_indices = dirichlet_split(y_train, num_clients=args.num_clients, alpha=args.dir_alpha)
+elif args.non_iid == 'pathological':
+    split_indices = pathological_split(y_train, num_clients=args.num_clients, num_classes=args.patho_classes)
+else:  # IID
+    split_indices = [np.random.choice(len(X_train), len(X_train) // args.num_clients) for _ in range(args.num_clients)]
+
+###新增测试用的##
+# 检查划分后的索引范围
+for i, indices in enumerate(split_indices):
+    if max(indices) >= len(X_train):
+        raise ValueError(f"Index {max(indices)} is out of bounds for X_train of size {len(X_train)} at client {i}")
+###新增测试用###
+
+
+
+clients_data = [Subset(X_train, indices) for indices in split_indices]
+#####新增的###
+
+###新增测试用的##
+# 在划分数据后添加调试信息
+print(f"X_train shape: {X_train.shape}")
+for i, client_data_idx in enumerate(split_indices):
+    print(f"Client {i} data index range: min={min(client_data_idx)}, max={max(client_data_idx)}")
+###新增测试用的##
 
 nk = floor(X_train.shape[0] / num_clients)
 n = X_train.shape[0]
@@ -214,6 +309,14 @@ X_test, X_help, y_test, y_help = train_test_split(X_test, y_test, \
 #
 ### END OF LOAD DATA SECTION
 
+####新增的####
+# 使用Dirichlet划分替换原有逻辑
+# split_indices = dirichlet_split(y_train, num_clients=args.num_clients, alpha=0.1)  # alpha控制异构程度
+# clients_data = [Subset(X_train, indices) for indices in split_indices]
+####新增的####
+
+
+
 
 agent_types.extend(["ServiceAgent"])
 agent_count += 1
@@ -224,6 +327,11 @@ a, b = agent_count, agent_count + num_clients
 ### Configure a service agent.
 agents.extend([ServiceAgent(
     id=0, name="PPFL Service Agent 0",
+###新增的####
+    clients_data=clients_data,
+    y_train=y_train,
+    kernel=kernel,  # 确保 kernel 对象被正确传递
+###新增的####
     type="ServiceAgent",
     random_state=np.random.RandomState(seed=np.random.randint(low=0, high=2 ** 32, dtype='uint64')),
     msg_fwd_delay=0,
@@ -248,9 +356,22 @@ agents.extend([ServiceAgent(
 
 client_init_start = time()
 
+####新增测试用的###
+# 在划分数据后添加调试信息
+print(f"X_train shape after splitting: {X_train.shape}")
+
+# 在创建客户端代理之前添加调试信息
+print(f"X_train shape before creating client agents: {X_train.shape}")
+####新增测试用###
+
+
+
 # Iterate over all client IDs.
 # Client index number starts from 1.
 for i in range(a, b):
+    ####新增的####
+    client_idx = split_indices[i - a]  # 假设split_indices是按客户端顺序生成的
+    ####新增的####
     agents.append(ClientAgent(id=i,
                               name="PPFL Client Agent {}".format(i),
                               type="ClientAgent",
@@ -262,10 +383,22 @@ for i in range(a, b):
                               debug_mode=debug_mode,
                               random_state=np.random.RandomState(
                                   seed=np.random.randint(low=0, high=2 ** 32, dtype='uint64')),
+                              ###原有的###
+                              # X_train=X_train,
+                              # y_train=y_train,
+                              ###原有的###
+                              input_length=input_length,
+                              ####新增的###
+                              client_data_idx=client_idx,  # 新增参数
+                              ####新增的###
+                              classes=np.unique(y_train),
+                              ###新增的###
+                              # X_train=X_train[client_idx],
+                              # y_train=y_train[client_idx],
+                              # 传递完整的 X_train 和 y_train
                               X_train=X_train,
                               y_train=y_train,
-                              input_length=input_length,
-                              classes=np.unique(y_train),
+                              ###新增的###
                               nk=nk,
                               c=args.constant,
                               m=args.multiplier,

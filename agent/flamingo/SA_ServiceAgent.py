@@ -41,7 +41,7 @@ def parallel_mult(vec, coeff):
 # PPFL_ServiceAgent class inherits from the base Agent class.
 class SA_ServiceAgent(Agent):
 
-    def __init__(self, id, name, type,
+    def __init__(self, id, name, type,kernel,
                  random_state=None,
                  msg_fwd_delay=1000000,
                  round_time=pd.Timedelta("10s"),
@@ -60,11 +60,35 @@ class SA_ServiceAgent(Agent):
                  y_help=None,
                  nk=None,
                  n=None,
+                 ###新增的###
+                 clients_data=None,
+                 y_train=None,
+                 ####新增的###
                  c=100,
                  m=16):
 
         # Base class init.
         super().__init__(id, name, type, random_state)
+        ###新增的###
+        if clients_data is None:
+            self.clients_data = [None] * num_clients  # 初始化 clients_data 列表，长度为客户端数量
+        else:
+            self.clients_data = clients_data
+        self.y_train = y_train
+
+        # 保存 kernel 对象
+        self.kernel = kernel
+
+        # 检查 kernel 对象是否为 None
+        if self.kernel is None:
+            raise ValueError("kernel object cannot be None.")
+
+        # 初始化 self.kernel.custom_state 中的 global_accuracy 键
+        if 'global_accuracy' not in self.kernel.custom_state:
+            self.kernel.custom_state['global_accuracy'] = []
+
+        ###新增的###
+
 
         # MLP inputs
         self.classes = classes
@@ -510,6 +534,15 @@ class SA_ServiceAgent(Agent):
         self.recordTime(dt_protocol_start, "CROSSCHECK")
 
     def reconstruction(self, currentTime):
+        ###新增测试用的###
+        print(f"client_id list: {list(self.users)}")
+        print(f"Length of self.clients_data: {len(self.clients_data)}")
+        print("self.kernel.custom_state:", self.kernel.custom_state)  # 添加调试信息
+        if 'global_accuracy' not in self.kernel.custom_state:
+            self.kernel.custom_state['global_accuracy'] = []
+
+        ###新增测试用的###
+
         """Reconstruct sum."""
 
         # print serialization cost
@@ -662,6 +695,48 @@ class SA_ServiceAgent(Agent):
             final_sum = self.vec_sum_partial + mi_vec
             print("[Server] no client dropped out.")
             print("[Server] final sum:", self.vec_sum_partial + mi_vec)
+        ####新增的####
+        # 在聚合后添加以下代码
+        client_class_dist = []
+        ###新增测试用的###
+        for client_id in self.users:
+            # 检查 client_id 是否为有效的整数
+            if not isinstance(client_id, int):
+                self.logger.error(f"Invalid client_id type: {type(client_id)}, value: {client_id}")
+                continue
+
+            # 假设 client_id 从 1 开始，转换为从 0 开始的索引
+            adjusted_client_id = client_id - 1
+            # 检查索引是否在合法范围内
+            if adjusted_client_id < 0 or adjusted_client_id >= len(self.clients_data):
+                self.logger.error(
+                    f"Invalid client_id {client_id} for self.clients_data of length {len(self.clients_data)}")
+                continue  # 跳过无效的 client_id
+
+                # 检查 self.clients_data[adjusted_client_id] 是否为 None
+                if self.clients_data[adjusted_client_id] is None:
+                    self.logger.error(f"self.clients_data[{adjusted_client_id}] is None for client_id {client_id}")
+                    continue
+
+                # 获取客户端数据索引
+                try:
+                    indices = self.clients_data[adjusted_client_id].indices
+                except AttributeError:
+                    self.logger.error(
+                        f"self.clients_data[{adjusted_client_id}] does not have an 'indices' attribute for client_id {client_id}")
+                    continue
+
+                # 统计类别分布
+                labels = self.y_train[indices]
+                unique, counts = np.unique(labels, return_counts=True)
+                dist = {cls: count for cls, count in zip(unique, counts)}
+                client_class_dist.append(dist)
+
+        self.kernel.custom_state['client_class_dist'] = client_class_dist
+        ####新增的####
+
+
+
         #################验证聚合解码结果########################
         if self.kernel.d_final_sum:
             file_name = f"log/server-decode-{self.id}-{self.current_iteration}.pkl"
@@ -741,6 +816,44 @@ class SA_ServiceAgent(Agent):
             PRO += i
 
         self.SCORE = mlp.score(self.X_test, self.y_test)
+        ####新增的####
+
+        # 收集各客户端的准确率
+        # 检查并初始化 client_variance 键
+        if 'client_variance' not in self.kernel.custom_state:
+            self.kernel.custom_state['client_variance'] = []
+
+        client_accuracies = []
+        for client_id in self.ids:
+            # 获取客户端代理
+            client_agent = self.kernel.agents[client_id]
+            # 检查 client_agent 是否有 X_test 和 y_test 属性
+            if hasattr(client_agent, 'X_test') and hasattr(client_agent, 'y_test'):
+                X_test = client_agent.X_test
+                y_test = client_agent.y_test
+                # 检查 X_test 是否为 None 或者是否为二维数组
+                if X_test is not None and len(X_test.shape) == 2:
+                    # 检查 client_agent 是否有 local_model 属性
+                    if hasattr(client_agent, 'local_model'):
+                        try:
+                            accuracy = client_agent.local_model.score(X_test, y_test)
+                            client_accuracies.append(accuracy)
+                        except Exception as e:
+                            self.logger.error(f"Error calculating accuracy for client {client_id}: {e}")
+                    else:
+                        self.logger.error(f"Client agent {client_id} does not have a 'local_model' attribute.")
+                else:
+                    self.logger.error(f"Client agent {client_id} has invalid X_test data. Expected 2D array.")
+            else:
+                self.logger.error(f"Client agent {client_id} does not have 'X_test' or 'y_test' attributes.")
+
+        # 计算准确率方差并保存
+        client_variance = np.var(client_accuracies)
+
+        self.kernel.custom_state['global_accuracy'].append(self.SCORE)
+        self.kernel.custom_state['client_variance'].append(np.var(client_accuracies))
+        ####新增的####
+
         finished_iteration = currentTime + server_comp_delay
         self.kernel.finish_score(self.SCORE, PRO.nbytes, self.current_iteration, finished_iteration)
         print("[Server] MLP SCORE: ", self.SCORE)
@@ -783,7 +896,16 @@ class SA_ServiceAgent(Agent):
         if (self.current_iteration > self.no_of_iterations):
             return
 
+
+        ###新增的###
+        # 在 SA_ServiceAgent 的 reconstruction 方法末尾添加
+        self.kernel.custom_state['client_class_dist'] = client_class_dist
+        ###新增的###
+
         self.setWakeup(currentTime + server_comp_delay + param.wt_flamingo_report)
+
+
+
 
     # ======================== UTIL ========================
 

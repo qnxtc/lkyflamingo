@@ -18,7 +18,28 @@ class Kernel:
         # kernel_name is for human readers only.
         self.name = kernel_name
         self.random_state = random_state
+        # ####新增测试的###
+        # self.dir_log_file = None  # 初始化属性
+        # try:
+        #     self.dir_log_file = open(os.path.join(self.dir_name,
+        #                                           f"{time.strftime('%Y_%m_%d %H_%M_%S', time.localtime())}.txt"),
+        #                              mode="w",
+        #                              encoding="utf-8")
+        # except Exception as e:
+        #     print(f"Error opening log file: {e}")
+        # ####新增测试的###
 
+        ###新增的###
+        # 初始化 custom_state 属性为一个空字典
+        self.custom_state = {}
+
+        # 初始化 dir_name 属性
+        self.dir_name = "data"
+        os.makedirs(self.dir_name, exist_ok=True)
+
+        self.dir_log_file = None  # 初始化属性
+
+        ###新增的###
         if not random_state:
             raise ValueError("A valid, seeded np.random.RandomState object is required " +
                              "for the Kernel", self.name)
@@ -53,8 +74,17 @@ class Kernel:
         ###############################################
         # self.prove_queue = queue.Queue()
 
+    ####原来的###
+    # def __del__(self):
+    #     self.dir_log_file.close()
+    ###原来的###
+    ###新增的###
     def __del__(self):
-        self.dir_log_file.close()
+        if self.dir_log_file:
+            self.dir_log_file.close()
+    ###新增的###
+
+
 
     # This is called to actually start the simulation, once all agent
     # configuration is done.
@@ -71,19 +101,31 @@ class Kernel:
         self.manages = [] if manages is None else manages
         self.e_final_sum = e_final_sum  # 编码数据
         self.d_final_sum = d_final_sum  # 解码数据
-
-        self.dir_name = "data"
-        os.makedirs(self.dir_name, exist_ok=True)
-
-        self.dir_log_file = open(os.path.join(self.dir_name,
-                                              f"{time.strftime('%Y_%m_%d %H_%M_%S', time.localtime())}.txt"),
-                                 mode="w",
-                                 encoding="utf-8")
+        ####原来的,挪到前面了###
+        # self.dir_name = "data"
+        # os.makedirs(self.dir_name, exist_ok=True)
+        #
+        # self.dir_log_file = open(os.path.join(self.dir_name,
+        #                                       f"{time.strftime('%Y_%m_%d %H_%M_%S', time.localtime())}.txt"),
+        #                          mode="w",
+        #                          encoding="utf-8")
+        ####原来的,挪到前面了###
         self.handle_T1_time = dict()  # 收到请求证明到生成pro_c的时间
         self.handle_T2_time = dict()
         self.handle_T3_time = dict()
         self.clients_pro_len = dict()
         self.clients_iter_numbers = 0
+        ###新增的###
+        # 初始化 global_accuracy 键为一个空列表
+        if 'global_accuracy' not in self.custom_state:
+            self.custom_state['global_accuracy'] = []
+        # print("Initialized global_accuracy in runner:", self.custom_state)  # 添加调试信息
+
+        # 初始化 client_variance 键为一个空列表
+        if 'client_variance' not in self.custom_state:
+            self.custom_state['client_variance'] = []
+        ###新增的###
+
 
         # Simulation custom state in a freeform dictionary.  Allows config files
         # that drive multiple simulations, or require the ability to generate
@@ -163,6 +205,14 @@ class Kernel:
 
         log_print("Kernel started: {}", self.name)
         log_print("Simulation started!")
+
+        ###新增的###
+        # 打开日志文件
+        self.dir_log_file = open(os.path.join(self.dir_name,
+                                              f"{time.strftime('%Y_%m_%d %H_%M_%S', time.localtime())}.txt"),
+                                 mode="w",
+                                 encoding="utf-8")
+        ###新增的###
 
         # Note that num_simulations has not yet been really used or tested
         # for anything.  Instead we have been running multiple simulations
@@ -351,7 +401,22 @@ class Kernel:
             print("{}: {:d}".format(a, int(round(value / count))))
 
         print("Simulation ending!")
+        ####新增的###
+        # 在 Kernel 的 runner 方法末尾添加
+        if 'client_class_dist' in self.custom_state:
+            print("\n--- Client Data Distribution ---")
+            for i, dist in enumerate(self.custom_state['client_class_dist']):
+                print(f"Client {i} Class Distribution: {dist}")
+        ####新增的###
+
+
         self.save_T2_T3_data()
+        ####新增的###
+        # 关闭日志文件
+        if self.dir_log_file:
+            self.dir_log_file.close()
+            self.dir_log_file = None
+        ####新增的###
         return self.custom_state
 
     def sendMessage(self, sender=None, recipient=None, msg=None, delay=0, tag=None):
