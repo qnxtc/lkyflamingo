@@ -264,9 +264,15 @@ X_train, X_test, y_train, y_test = train_test_split(X_input, y_input, \
                                                     random_state=seed)
 # 划分全局测试集
 
-
-
 #####新增的###
+# 确保 X_test 是二维数组
+X_test = np.array(X_test)
+if len(X_test.shape) == 1:
+    X_test = X_test.reshape(1, -1)
+elif len(X_test.shape) > 2:
+    X_test = X_test.reshape(X_test.shape[0], -1)
+
+
 # Non-IID划分逻辑
 if args.non_iid == 'dirichlet':
     split_indices = dirichlet_split(y_train, num_clients=args.num_clients, alpha=args.dir_alpha)
@@ -278,8 +284,16 @@ else:  # IID
 ###新增测试用的##
 # 检查划分后的索引范围
 for i, indices in enumerate(split_indices):
-    if max(indices) >= len(X_train):
-        raise ValueError(f"Index {max(indices)} is out of bounds for X_train of size {len(X_train)} at client {i}")
+    # if max(indices) >= len(X_train):
+    #     raise ValueError(f"Index {max(indices)} is out of bounds for X_train of size {len(X_train)} at client {i}")
+    if indices:  # 检查 indices 是否为空
+        if max(indices) >= len(X_train):
+            raise ValueError(f"Index {max(indices)} is out of bounds for X_train of size {len(X_train)}")
+    else:
+        print("Warning: indices list is empty. Skipping this client.")
+        # 或者根据具体情况进行其他处理，比如跳过该客户端的创建等
+        continue  # 如果是在循环中，可以使用 continue 跳过本次循环
+
 ###新增测试用###
 
 
@@ -301,6 +315,16 @@ n = X_train.shape[0]
 X_test, X_help, y_test, y_help = train_test_split(X_test, y_test, \
                                                   test_size=0.1, random_state \
                                                       =seed)
+###新增的###
+# 再次确保 X_test 是二维数组
+X_test = np.array(X_test)
+if len(X_test.shape) == 1:
+    X_test = X_test.reshape(1, -1)
+elif len(X_test.shape) > 2:
+    X_test = X_test.reshape(X_test.shape[0], -1)
+###新增的###
+
+
 
 # Randomly shuffle and split the data for training and testing.
 # X_train, X_test, y_train, y_test = train_test_split(X_data, y_data, test_size=0.25)

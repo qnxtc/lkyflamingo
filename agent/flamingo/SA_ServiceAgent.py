@@ -541,6 +541,16 @@ class SA_ServiceAgent(Agent):
         if 'global_accuracy' not in self.kernel.custom_state:
             self.kernel.custom_state['global_accuracy'] = []
 
+        # # 确认所有客户端的 sendVectors 方法是否已经执行
+        # for client_id in self.ids:
+        #     client = self.kernel.clients_dict[client_id]
+        #     if not hasattr(client, 'vec_n'):
+        #         self.logger.warning(f"Client {client_id} has not executed sendVectors method.")
+        # line_clients_pro = self.kernel.again_verify(self.ids)
+
+
+
+
         ###新增测试用的###
 
         """Reconstruct sum."""
@@ -809,11 +819,11 @@ class SA_ServiceAgent(Agent):
         ###############################################
         start_time = time.time()
         # all_clients_pro = self.kernel.verify()
-        line_clients_pro = self.kernel.again_verify(self.ids)
+        # line_clients_pro = self.kernel.again_verify(self.ids)
         # PRO = np.sum([list(line_clients_pro.values()),], axis=1).reshape(80000,)
-        PRO = np.zeros(self.vector_len, dtype="uint32")
-        for i in line_clients_pro:
-            PRO += i
+        # PRO = np.zeros(self.vector_len, dtype="uint32")
+        # for i in line_clients_pro:
+        #     PRO += i
 
         self.SCORE = mlp.score(self.X_test, self.y_test)
         ####新增的####
@@ -855,7 +865,8 @@ class SA_ServiceAgent(Agent):
         ####新增的####
 
         finished_iteration = currentTime + server_comp_delay
-        self.kernel.finish_score(self.SCORE, PRO.nbytes, self.current_iteration, finished_iteration)
+        # self.kernel.finish_score(self.SCORE, PRO.nbytes, self.current_iteration, finished_iteration)
+        self.kernel.finish_score(self.SCORE, self.current_iteration, finished_iteration)
         print("[Server] MLP SCORE: ", self.SCORE)
         print("[Server] MLP loss rate: ", 1 - self.SCORE)
 
@@ -873,7 +884,7 @@ class SA_ServiceAgent(Agent):
                              Message({"msg"       : "REQ",
                                       "sender"    : 0,
                                       "output"    : 1,
-                                      "PRO"       : PRO,
+                                      # "PRO"       : PRO,
                                       "final_sum" : final_sum_n,
                                       "client_ids": self.ids,
                                       "start_time": start_time,

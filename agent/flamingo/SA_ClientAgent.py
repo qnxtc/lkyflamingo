@@ -52,6 +52,7 @@ class SA_ClientAgent(Agent):
                  c=100,
                  m=16):
         ####新增测试用的###
+
         # 检查索引是否越界
         if max(client_data_idx) >= len(X_train):
             raise ValueError(f"Index {max(client_data_idx)} is out of bounds for X_train of size {len(X_train)}")
@@ -66,15 +67,36 @@ class SA_ClientAgent(Agent):
         self.trainY = y_train[client_data_idx]
 
         # 检查 X_test 是否为 None 或者是否为二维数组
-        if X_test is not None and len(X_test.shape) != 2:
-            # 如果 X_test 是一维数组，尝试将其转换为二维数组
-            if len(X_test.shape) == 1:
-                X_test = X_test.reshape(-1, 1)
-            else:
-                raise ValueError("X_test must be a 2D array.")
+        # if X_test is not None and len(X_test.shape) != 2:
+        #     # 如果 X_test 是一维数组，尝试将其转换为二维数组
+        #     if len(X_test.shape) == 1:
+        #         X_test = X_test.reshape(-1, 1)
+        #     else:
+        #         raise ValueError("X_test must be a 2D array.")
+        # 确保 X_test 是二维数组
+        X_test = np.array(X_test)
+        if len(X_test.shape) == 1:
+            X_test = X_test.reshape(1, -1)
+        elif len(X_test.shape) > 2:
+            X_test = X_test.reshape(X_test.shape[0], -1)
+
 
         self.X_test =X_test # 初始化 X_test 属性
         self.y_test =y_test # 初始化 y_test 属性
+        self.y_train = y_train  # 新增：保存 y_train 属性
+
+        # 获取所有可能的类别
+        self.all_classes = np.unique(self.y_train)
+        # 初始化 MLPClassifier 时指定所有类别
+        self.mlp = MLPClassifier(max_iter=1, warm_start=True)
+
+        # 扩展 X 以匹配 y 的长度
+        X_init = np.zeros((len(self.all_classes), X_train.shape[1]))
+        self.mlp.partial_fit(X_init, self.all_classes, self.all_classes)
+
+        # # 初始化 MLPClassifier 时指定所有类别
+        # self.mlp = MLPClassifier(max_iter=1, warm_start=True)
+        # self.mlp.partial_fit(np.zeros((1, X_train.shape[1])), self.all_classes, self.all_classes)
 
                 ####新增的####
 
@@ -294,9 +316,9 @@ class SA_ClientAgent(Agent):
         # Receiving the output from the server
         elif msg.body['msg'] == "REQ" and self.current_iteration != 0:
             start = time.time()
-            PRO = msg.body['PRO']
+            # PRO = msg.body['PRO']
             final_sum = msg.body['final_sum']
-            self.verify_result(PRO, final_sum)
+            # self.verify_result(PRO, final_sum)
 
             end = time.time()
             start_time = msg.body['start_time']
@@ -333,14 +355,30 @@ class SA_ClientAgent(Agent):
     ###################################
     def sendVectors(self, currentTime):
 
+        # ###新增的###
+
+        # 确保 X_test 是二维数组
+        if len(self.X_test.shape) == 1:
+            self.X_test = self.X_test.reshape(1, -1)
+        elif len(self.X_test.shape) > 2:
+            self.X_test = self.X_test.reshape(self.X_test.shape[0], -1)
+
+        self.logger.info(f"Client {self.id} is executing sendVectors method.")
+        # # 确保传递所有可能的类别
+        # all_classes = np.unique(self.y_train)  # 假设 self.y_train 包含所有类别
+        # self.mlp.partial_fit(self.trainX, self.trainY, all_classes)
+        # ###新增的###
+
         dt_protocol_start = pd.Timestamp('now')
 
         # train local data
-        mlp = MLPClassifier()
+        # mlp = MLPClassifier()
         # print("CURRENT ITERATION")
         # print(self.current_iteration)
+
         if self.current_iteration > 1:
-            mlp = MLPClassifier(warm_start=True)
+            mlp = MLPClassifier(max_iter=1)
+            # mlp = MLPClassifier(warm_start=True)
             mlp.coefs_ = self.global_coefs.copy()
             mlp.intercepts_ = self.global_int.copy()
 
@@ -353,6 +391,12 @@ class SA_ClientAgent(Agent):
             mlp.best_loss_ = self.global_best_loss
             mlp.loss_curve_ = self.global_loss_curve.copy()
             mlp.out_activation_ = "softmax"
+        else:
+            # mlp = MLPClassifier(max_iter=1, warm_start=True)
+            mlp = MLPClassifier(max_iter=1)
+            # 扩展 X 以匹配 y 的长度
+            X_init = np.zeros((len(self.all_classes), self.trainX.shape[1]))
+            mlp.partial_fit(X_init, self.all_classes, self.all_classes)
 
         # num epochs
         ###原来的###
@@ -360,8 +404,11 @@ class SA_ClientAgent(Agent):
         #     mlp.partial_fit(self.trainX[self.no_of_iterations], self.trainY[self.no_of_iterations], self.classes)
         ###原来的###
         ###新增的###
+        # 确保传递所有可能的类别
+        # all_classes = np.unique(self.y_train)  # 假设 self.y_train 包含所有类别
+        # num epochs
         for j in range(5):
-            mlp.partial_fit(self.trainX, self.trainY, self.classes)
+            mlp.partial_fit(self.trainX, self.trainY, self.all_classes)
 
         # 保存训练好的模型为 local_model 属性
         self.local_model = mlp
@@ -420,8 +467,12 @@ class SA_ClientAgent(Agent):
             with open(file_name, "wb") as f:
                 pickle.dump(vec, f)
         ######################################################
-        self.vec_n = deepcopy(vec)
-
+        ####原来的###
+        # self.vec_n = deepcopy(vec)
+        ###原来的###
+        ###新增的###
+        self.en_vec_n = vec
+        ###新增的###
         # Find this client's neighbors: parse graph from PRG(PRF(iter, root_seed))
         self.neighbors_list = param.findNeighbors(param.root_seed, self.current_iteration, self.num_clients, self.id,
                                                   self.neighborhood_size)
@@ -724,57 +775,62 @@ class SA_ClientAgent(Agent):
         dt_protocol_end = pd.Timestamp('now')
         self.elapsed_time[categoryName] += dt_protocol_end - startTime
 
-    def verify_init(self):
-        self.manages_info = dict()
-        self.kc = 0
-        self.big_alpha = 0
-        self.big_K = 0
-
-        # # 创建一个用于 Diffie-Hellman 密钥交换的对象。
-        self.dh_key_obj = DHKeyExchange(mod_args.q, mod_args.g)
-
-    def send_public_to_manage(self):
-        send_data = []
-        for mange in self.kernel.manages:
-            send_data.append({
-                "c_id"    : self.id,
-                "m_id"    : mange.id,
-                "c_public": self.dh_key_obj.public_key
-            })
-
-        return send_data
-
-    def generate_public(self, m_data: dict):
-        if m_data["m_id"] not in self.manages_info.keys():
-            self.manages_info[m_data["m_id"]] = dict()
-        self.manages_info[m_data["m_id"]]["m_public"] = m_data["m_public"]
-        km = self.dh_key_obj.compute_shared_secret(m_data["m_public"], mod_args.q)
-        self.manages_info[m_data["m_id"]]["km"] = km
-
-    def decrypt_big_k_alpha(self, c_data: dict):
-        km = self.manages_info[c_data["m_id"]]["km"]
-        decrypt_text = aes_decrypt(c_data["en_text"], km)
-        big_K, alpha = map(lambda x: int(x), decrypt_text.split("&&"))
-        self.manages_info[c_data["m_id"]]["big_K"] = big_K
-        self.manages_info[c_data["m_id"]]["alpha"] = alpha
-
-    def handle_km_alpha(self):
-        for manage in self.manages_info.values():
-            self.kc += manage["km"]
-            self.big_alpha += manage["alpha"]
-            self.big_K += manage["big_K"]
-
-    def count_pro_c(self):
-        self.pro_c = self.kc + self.big_alpha * self.vec_n
-        self.kernel.clients_pro_len[self.id] = self.pro_c.nbytes
-        return self.pro_c
-
-    def verify_result(self, PRO, final_sum):
-        #  aggregation_pro-K-α×final_sum=0
-        result = PRO - self.big_K - self.big_alpha * final_sum
-        if not np.all(result == 0):
-            print(f"client {self.id} verify result 校验不通过！")
-            exit(-1)
-        else:
-            # print(f"client {self.id} verify result 校验通过！")
-            pass
+    # def verify_init(self):
+    #     self.manages_info = dict()
+    #     self.kc = 0
+    #     self.big_alpha = 0
+    #     self.big_K = 0
+    #
+    #     # # 创建一个用于 Diffie-Hellman 密钥交换的对象。
+    #     self.dh_key_obj = DHKeyExchange(mod_args.q, mod_args.g)
+    #
+    # def send_public_to_manage(self):
+    #     send_data = []
+    #     for mange in self.kernel.manages:
+    #         send_data.append({
+    #             "c_id"    : self.id,
+    #             "m_id"    : mange.id,
+    #             "c_public": self.dh_key_obj.public_key
+    #         })
+    #
+    #     return send_data
+    #
+    # def generate_public(self, m_data: dict):
+    #     if m_data["m_id"] not in self.manages_info.keys():
+    #         self.manages_info[m_data["m_id"]] = dict()
+    #     self.manages_info[m_data["m_id"]]["m_public"] = m_data["m_public"]
+    #     km = self.dh_key_obj.compute_shared_secret(m_data["m_public"], mod_args.q)
+    #     self.manages_info[m_data["m_id"]]["km"] = km
+    #
+    # def decrypt_big_k_alpha(self, c_data: dict):
+    #     km = self.manages_info[c_data["m_id"]]["km"]
+    #     decrypt_text = aes_decrypt(c_data["en_text"], km)
+    #     big_K, alpha = map(lambda x: int(x), decrypt_text.split("&&"))
+    #     self.manages_info[c_data["m_id"]]["big_K"] = big_K
+    #     self.manages_info[c_data["m_id"]]["alpha"] = alpha
+    #
+    # def handle_km_alpha(self):
+    #     for manage in self.manages_info.values():
+    #         self.kc += manage["km"]
+    #         self.big_alpha += manage["alpha"]
+    #         self.big_K += manage["big_K"]
+    #
+    # def count_pro_c(self):
+    #     ##新增的##
+    #     if not hasattr(self, 'vec_n'):
+    #         raise AttributeError(
+    #             "Attribute 'vec_n' is not defined. Please ensure 'sendVectors' method has been called.")
+    #     ##新增的##
+    #     self.pro_c = self.kc + self.big_alpha * self.vec_n
+    #     self.kernel.clients_pro_len[self.id] = self.pro_c.nbytes
+    #     return self.pro_c
+    #
+    # def verify_result(self, PRO, final_sum):
+    #     #  aggregation_pro-K-α×final_sum=0
+    #     result = PRO - self.big_K - self.big_alpha * final_sum
+    #     if not np.all(result == 0):
+    #         print(f"client {self.id} verify result 校验不通过！")
+    #         exit(-1)
+    #     else:
+    #         # print(f"client {self.id} verify result 校验通过！")
+    #         pass

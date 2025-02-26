@@ -32,6 +32,7 @@ class Kernel:
         ###新增的###
         # 初始化 custom_state 属性为一个空字典
         self.custom_state = {}
+        self.clients_dict = {}  # 定义 clients_dict 属性
 
         # 初始化 dir_name 属性
         self.dir_name = "data"
@@ -116,6 +117,11 @@ class Kernel:
         self.clients_pro_len = dict()
         self.clients_iter_numbers = 0
         ###新增的###
+        # 假设这里有创建客户端代理的代码
+        for i, agent in enumerate(agents):
+            if isinstance(agent, Client):
+                self.clients_dict[agent.id] = agent
+
         # 初始化 global_accuracy 键为一个空列表
         if 'global_accuracy' not in self.custom_state:
             self.custom_state['global_accuracy'] = []
@@ -660,140 +666,155 @@ class Kernel:
                 agents.append(agent)
         return agents
 
-    def again_verify(self, line_clients: list) -> list:
-        """伪代码
-
-        1.管理者随机生成alpha
-          km是管理者与每个客户端一一对应的k
-          需要初始化出与客户端数同等的数量k
-          初始化出来后得到了管理者自己的km
-        2.每个管理者将这个一一对应的key发送到每个客户端中去
-        3.客户端收到每个管理者发送的km,并计算出自己的kc,其中将每个管理者的km单独存储起来
-
-        4.每个管理者将自己的km与alpha发送给每个客户端
-        5.每个客户端收到所有管理者发送来的km与alpha后，生成大K与大alpha(这个是每个客户端独有的)
-
-        6.每个客户端生成自己的pro_c=kc+大alpha*ver_n，并将其给到服务端
-
-        7.服务端收到每个客户端的pro_c，将其相加成为PRO
-          并将服务端生成的PRO与final_sum发送每个客户端
-        8.每个客户端收到PRO与final_sum后，使用公式：PRO-大K-大alpha*ver_n
-        """
-        self.manager_dict = dict(map(lambda x: (x.id, x), self.manages))
-        self.clients = self.findAgentsByType(Client)
-        self.clients_dict = dict(map(lambda x: (x.id, x), self.clients))
-        # 1.管理者随机生成alpha
-        #   km是管理者与每个客户端一一对应的k
-        #   需要初始化出与客户端数同等的数量k
-        #   初始化出来后得到了管理者自己的km
-
-        # 客户端发起请求
-        c_public_keys = []
-        for c_id in line_clients:
-            self.handle_T1_time[c_id] = []
-            start = time.time()
-            self.clients_dict[c_id].verify_init()
-            end = time.time()
-            self.handle_T1_time[c_id].append(end - start)
-
-            start = time.time()
-            c_public_keys.append(self.clients_dict[c_id].send_public_to_manage())
-            end = time.time()
-            self.handle_T1_time[c_id].append(end - start)
-
-        # 生成管理端共享密钥
-        m_public_keys = []
-        for manage in self.manages:
-            m_public_keys += manage.verify_init(c_public_keys)
-        # 生成客户端共享密钥
-        for m_d in m_public_keys:
-            start = time.time()
-            self.clients_dict[m_d["c_id"]].generate_public(m_d)
-            end = time.time()
-            self.handle_T1_time[m_d["c_id"]].append(end - start)
-
-        # 聚合所有管理端的km 发送加密big_K与alpha
-        sipher_data = []
-        for manage in self.manages:
-            manage.count_km()
-            sipher_data += manage.send_cipher_text(line_clients)
-        # 解密管理端big_K与alpha
-        for c_data in sipher_data:
-            start = time.time()
-            self.clients_dict[c_data["c_id"]].decrypt_big_k_alpha(c_data)
-            end = time.time()
-            self.handle_T1_time[c_data["c_id"]].append(end - start)
-        # 3.客户端收到每个管理者发送的km,并计算出自己的kc、km与alpha,其中将每个管理者的km单独存储起来
-        for c_id in line_clients:
-            start = time.time()
-            self.clients_dict[c_id].handle_km_alpha()
-            end = time.time()
-            self.handle_T1_time[c_id].append(end - start)
-
-        # 5.每个客户端生成自己的pro_c=kc+大alpha*ver_n，并将其给到服务端
-        self.clients_pro = list()
-        for c_id in line_clients:
-            start = time.time()
-            self.clients_pro.append(self.clients_dict[c_id].count_pro_c())
-            end = time.time()
-            self.handle_T1_time[c_id].append(end - start)
-
-        for c_id, _t in self.handle_T1_time.copy().items():
-            self.handle_T1_time[c_id] = sum(self.handle_T1_time[c_id])
-
-        return self.clients_pro
-        # 6.服务端收到每个客户端的pro_c，将其相加成为PRO
-        #   并将服务端生成的PRO与final_sum发送每个客户端
-        # 7.每个客户端收到PRO与final_sum后，使用公式：PRO-大K-大alpha*ver_n
-
-    def file_write(self, write_txt: str):
-        self.dir_log_file.write(write_txt)
-        self.dir_log_file.flush()
-
-    def handle_log_time(self, handle_data: dict, _type: str):
-        log_time = dict()
-        sum_sum = 0
-        _clients = []
-        for i, (c_id, _t) in enumerate(handle_data.items()):
-            i += 1
-            sum_sum += _t
-            _clients.append(c_id)
-            if i % 10 == 0:
-                log_time[i] = {
-                    "num"    : sum_sum,
-                    "clients": _clients.copy(),
-                }
-
-        log_time[len(handle_data)] = {
-            "num"    : sum_sum,
-            "clients": _clients.copy(),
-        }
-        write_txt = f"{_type}\n"
-        if _type == "BYTE":
-            for k, v in log_time.items():
-                write_txt += f"客户端数：{k}\t字节数：{v['num']}\t客户端：{v['clients']}\n"
-        else:
-            for k, v in log_time.items():
-                write_txt += f"客户端数：{k}\t时间：{v['num']}\t客户端：{v['clients']}\n"
-        self.file_write(write_txt)
+    # def again_verify(self, line_clients: list) -> list:
+    #     """伪代码
+    #
+    #     1.管理者随机生成alpha
+    #       km是管理者与每个客户端一一对应的k
+    #       需要初始化出与客户端数同等的数量k
+    #       初始化出来后得到了管理者自己的km
+    #     2.每个管理者将这个一一对应的key发送到每个客户端中去
+    #     3.客户端收到每个管理者发送的km,并计算出自己的kc,其中将每个管理者的km单独存储起来
+    #
+    #     4.每个管理者将自己的km与alpha发送给每个客户端
+    #     5.每个客户端收到所有管理者发送来的km与alpha后，生成大K与大alpha(这个是每个客户端独有的)
+    #
+    #     6.每个客户端生成自己的pro_c=kc+大alpha*ver_n，并将其给到服务端
+    #
+    #     7.服务端收到每个客户端的pro_c，将其相加成为PRO
+    #       并将服务端生成的PRO与final_sum发送每个客户端
+    #     8.每个客户端收到PRO与final_sum后，使用公式：PRO-大K-大alpha*ver_n
+    #     """
+    #     self.manager_dict = dict(map(lambda x: (x.id, x), self.manages))
+    #     self.clients = self.findAgentsByType(Client)
+    #     # self.clients_dict = dict(map(lambda x: (x.id, x), self.clients))
+    #     # 1.管理者随机生成alpha
+    #     #   km是管理者与每个客户端一一对应的k
+    #     #   需要初始化出与客户端数同等的数量k
+    #     #   初始化出来后得到了管理者自己的km
+    #
+    #     # 客户端发起请求
+    #     c_public_keys = []
+    #     for c_id in line_clients:
+    #         self.handle_T1_time[c_id] = []
+    #         start = time.time()
+    #         self.clients_dict[c_id].verify_init()
+    #         end = time.time()
+    #         self.handle_T1_time[c_id].append(end - start)
+    #
+    #         start = time.time()
+    #         c_public_keys.append(self.clients_dict[c_id].send_public_to_manage())
+    #         end = time.time()
+    #         self.handle_T1_time[c_id].append(end - start)
+    #
+    #     # 生成管理端共享密钥
+    #     m_public_keys = []
+    #     for manage in self.manages:
+    #         m_public_keys += manage.verify_init(c_public_keys)
+    #     # 生成客户端共享密钥
+    #     for m_d in m_public_keys:
+    #         start = time.time()
+    #         self.clients_dict[m_d["c_id"]].generate_public(m_d)
+    #         end = time.time()
+    #         self.handle_T1_time[m_d["c_id"]].append(end - start)
+    #
+    #     # 聚合所有管理端的km 发送加密big_K与alpha
+    #     sipher_data = []
+    #     for manage in self.manages:
+    #         manage.count_km()
+    #         sipher_data += manage.send_cipher_text(line_clients)
+    #     # 解密管理端big_K与alpha
+    #     for c_data in sipher_data:
+    #         start = time.time()
+    #         self.clients_dict[c_data["c_id"]].decrypt_big_k_alpha(c_data)
+    #         end = time.time()
+    #         self.handle_T1_time[c_data["c_id"]].append(end - start)
+    #     # 3.客户端收到每个管理者发送的km,并计算出自己的kc、km与alpha,其中将每个管理者的km单独存储起来
+    #     for c_id in line_clients:
+    #         start = time.time()
+    #         self.clients_dict[c_id].handle_km_alpha()
+    #         end = time.time()
+    #         self.handle_T1_time[c_id].append(end - start)
+    #
+    #     # 5.每个客户端生成自己的pro_c=kc+大alpha*ver_n，并将其给到服务端
+    #     self.clients_pro = list()
+    #     for c_id in line_clients:
+    #         start = time.time()
+    #         self.clients_pro.append(self.clients_dict[c_id].count_pro_c())
+    #         end = time.time()
+    #         self.handle_T1_time[c_id].append(end - start)
+    #
+    #     for c_id, _t in self.handle_T1_time.copy().items():
+    #         self.handle_T1_time[c_id] = sum(self.handle_T1_time[c_id])
+    #
+    #     return self.clients_pro
+    #     # 6.服务端收到每个客户端的pro_c，将其相加成为PRO
+    #     #   并将服务端生成的PRO与final_sum发送每个客户端
+    #     # 7.每个客户端收到PRO与final_sum后，使用公式：PRO-大K-大alpha*ver_n
+    #
+    # def file_write(self, write_txt: str):
+    #     self.dir_log_file.write(write_txt)
+    #     self.dir_log_file.flush()
+    #
+    # def handle_log_time(self, handle_data: dict, _type: str):
+    #     log_time = dict()
+    #     sum_sum = 0
+    #     _clients = []
+    #     for i, (c_id, _t) in enumerate(handle_data.items()):
+    #         i += 1
+    #         sum_sum += _t
+    #         _clients.append(c_id)
+    #         if i % 10 == 0:
+    #             log_time[i] = {
+    #                 "num"    : sum_sum,
+    #                 "clients": _clients.copy(),
+    #             }
+    #
+    #     log_time[len(handle_data)] = {
+    #         "num"    : sum_sum,
+    #         "clients": _clients.copy(),
+    #     }
+    #     write_txt = f"{_type}\n"
+    #     if _type == "BYTE":
+    #         for k, v in log_time.items():
+    #             write_txt += f"客户端数：{k}\t字节数：{v['num']}\t客户端：{v['clients']}\n"
+    #     else:
+    #         for k, v in log_time.items():
+    #             write_txt += f"客户端数：{k}\t时间：{v['num']}\t客户端：{v['clients']}\n"
+    #     self.file_write(write_txt)
 
     def save_T2_T3_data(self):
         self.file_write(f"Number of rounds {self.iterations}\n")
-        self.handle_log_time(self.handle_T1_time, "T1")
-        self.handle_T1_time.clear()
-        self.handle_log_time(self.handle_T2_time, "T2")
-        self.handle_T2_time.clear()
-        self.handle_log_time(self.handle_T3_time, "T3")
-        self.handle_T3_time.clear()
-        self.handle_log_time(self.clients_pro_len, "BYTE")
-        self.clients_pro_len.clear()
-        self.file_write(f"PRO_LEN：{self.PRO_len}\n")
+        # self.handle_log_time(self.handle_T1_time, "T1")
+        # self.handle_T1_time.clear()
+        # self.handle_log_time(self.handle_T2_time, "T2")
+        # self.handle_T2_time.clear()
+        # self.handle_log_time(self.handle_T3_time, "T3")
+        # self.handle_T3_time.clear()
+        # self.handle_log_time(self.clients_pro_len, "BYTE")
+        # self.clients_pro_len.clear()
+        # self.file_write(f"PRO_LEN：{self.PRO_len}\n")
         self.file_write(f"score：{self.SCORE}\n")
         self.file_write(f"loss rate：{1 - self.SCORE}\n")
         self.file_write(f"finished iteration：{self.finished_iteration}\n\n")
 
-    def finish_score(self, score, PRO_len, iterations, finished_iteration):
+    # def finish_score(self, score, PRO_len, iterations, finished_iteration):
+    #     self.SCORE = score
+    #     self.PRO_len = PRO_len
+    #     self.iterations = iterations
+    #     self.finished_iteration = finished_iteration
+
+    ###新增的###
+    def file_write(self, content):
+        if self.dir_log_file:
+            try:
+                self.dir_log_file.write(content)
+                self.dir_log_file.flush()
+            except Exception as e:
+                print(f"Error writing to file: {e}")
+
+    ###新增的###
+    def finish_score(self, score, iterations, finished_iteration):
         self.SCORE = score
-        self.PRO_len = PRO_len
         self.iterations = iterations
         self.finished_iteration = finished_iteration
