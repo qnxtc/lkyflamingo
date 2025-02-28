@@ -1,0 +1,100 @@
+Number of rounds 1
+score：0.30482539682539683
+loss rate：0.6951746031746031
+finished iteration：2023-01-01 00:00:11.076646
+
+Number of rounds 2
+score：0.9186666666666666
+loss rate：0.08133333333333337
+finished iteration：2023-01-01 00:00:30.357738
+
+Number of rounds 3
+score：0.9378412698412698
+loss rate：0.06215873015873019
+finished iteration：2023-01-01 00:00:49.533613
+
+Number of rounds 4
+score：0.9455238095238095
+loss rate：0.054476190476190456
+finished iteration：2023-01-01 00:01:08.978127
+
+Number of rounds 5
+score：0.9502222222222222
+loss rate：0.04977777777777781
+finished iteration：2023-01-01 00:01:28.374335
+
+Number of rounds 6
+score：0.951936507936508
+loss rate：0.04806349206349203
+finished iteration：2023-01-01 00:01:48.040038
+
+Number of rounds 7
+score：0.9537142857142857
+loss rate：0.04628571428571426
+finished iteration：2023-01-01 00:02:07.712076
+
+Number of rounds 8
+score：0.9535238095238096
+loss rate：0.04647619047619045
+finished iteration：2023-01-01 00:02:27.495297
+
+Number of rounds 9
+score：0.9525714285714286
+loss rate：0.047428571428571376
+finished iteration：2023-01-01 00:02:47.427280
+
+Number of rounds 10
+score：0.9521904761904761
+loss rate：0.04780952380952386
+finished iteration：2023-01-01 00:03:07.393832
+
+Number of rounds 11
+score：0.9532698412698413
+loss rate：0.04673015873015873
+finished iteration：2023-01-01 00:03:31.897487
+
+Number of rounds 12
+score：0.9521269841269842
+loss rate：0.047873015873015845
+finished iteration：2023-01-01 00:03:52.033230
+
+Number of rounds 13
+score：0.9513015873015873
+loss rate：0.048698412698412685
+finished iteration：2023-01-01 00:04:12.159539
+
+Number of rounds 14
+score：0.9526349206349206
+loss rate：0.04736507936507939
+finished iteration：2023-01-01 00:04:32.294546
+
+Number of rounds 15
+score：0.9517460317460318
+loss rate：0.048253968253968216
+finished iteration：2023-01-01 00:04:52.385394
+
+Number of rounds 16
+score：0.9507301587301588
+loss rate：0.04926984126984124
+finished iteration：2023-01-01 00:05:12.466576
+
+Number of rounds 17
+score：0.9495873015873015
+loss rate：0.050412698412698465
+finished iteration：2023-01-01 00:05:32.724921
+
+Number of rounds 18
+score：0.9495238095238095
+loss rate：0.05047619047619045
+finished iteration：2023-01-01 00:05:52.884738
+
+Number of rounds 19
+score：0.9487619047619048
+loss rate：0.051238095238095194
+finished iteration：2023-01-01 00:06:13.174709
+
+Number of rounds 20
+score：0.9496507936507936
+loss rate：0.050349206349206366
+finished iteration：2023-01-01 00:06:33.254074
+

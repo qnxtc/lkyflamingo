@@ -1,0 +1,10 @@
+Number of rounds 1
+score：0.29574603174603176
+loss rate：0.7042539682539682
+finished iteration：2023-01-01 00:00:11.156338
+
+Number of rounds 2
+score：0.9179047619047619
+loss rate：0.08209523809523811
+finished iteration：2023-01-01 00:00:30.299140
+
