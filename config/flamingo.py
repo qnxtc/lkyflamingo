@@ -24,7 +24,7 @@ from model.LatencyModel import LatencyModel
 from util import param
 from util import util
 
-parser = argparse.ArgumentParser(description='Detailed options for PPFL config.')
+parser = argparse.ArgumentParser(description='Detailed options for PPFL config with latency testing.')
 parser.add_argument('-a', '--clear_learning', action='store_true',
                     help='Learning in the clear (vs SMP protocol)')
 parser.add_argument('-c', '--config', required=True,
@@ -66,6 +66,14 @@ parser.add_argument('-fd', '--d_final_sum', action="store_true",
                     help='save final sum decode data')
 parser.add_argument('-fe', '--e_final_sum', action="store_true",
                     help='save final sum encode data')
+
+# 新增延迟测试相关参数
+parser.add_argument('--latency-test', action='store_true', help='Enable latency testing')
+parser.add_argument('--latency-level', type=int, default=10, help='Latency level in milliseconds')
+parser.add_argument('--latency-test-multiple', action='store_true',
+                    help='Run multiple latency levels and compare results')
+parser.add_argument('--latency-levels', type=int, nargs='+', default=[1, 10, 100, 1000],
+                    help='List of latency levels (in milliseconds) to test when using --latency-test-multiple')
 
 args, remaining_args = parser.parse_known_args()
 
@@ -110,13 +118,6 @@ debug_mode = args.debug_mode
 
 if not param.assert_power_of_two(num_clients):
     raise ValueError("Number of clients must be power of 2")
-
-# split_size = args.split_size
-# max_logreg_iterations = args.max_logreg_iterations
-# epsilon = args.epsilon
-# learning_rate = args.learning_rate
-# clear_learning = args.clear_learning
-# collusion = args.collusion
 
 ### How many client agents will there be?   1000 in 125 subgraphs of 8 fits ln(n), for example
 # num_subgraphs = args.num_subgraphs
@@ -207,11 +208,6 @@ X_test, X_help, y_test, y_help = train_test_split(X_test, y_test, \
                                                   test_size=0.1, random_state \
                                                       =seed)
 
-# Randomly shuffle and split the data for training and testing.
-# X_train, X_test, y_train, y_test = train_test_split(X_data, y_data, test_size=0.25)
-
-#
-#
 ### END OF LOAD DATA SECTION
 
 
@@ -279,43 +275,117 @@ init_seconds = client_init_end - client_init_start
 td_init = timedelta(seconds=init_seconds)
 print(f"Client init took {td_init}")
 
-### Configure a latency model for the agents.
 
-# Get a new-style cubic LatencyModel from the networking literature.
-pairwise = (len(agent_types), len(agent_types))
+### 延迟测试逻辑
+def run_latency_test(latency_level):
+    print(f"\n=== Running latency test with level: {latency_level} ms ===")
 
-model_args = {'connected'  : True,
+    ### Configure a latency model for the agents.
+    pairwise = (len(agent_types), len(agent_types))
 
-              # All in NYC.
-              # Only matters for evaluating "real world" protocol duration,
-              # not for accuracy, collusion, or reconstruction.
-              'min_latency': np.random.uniform(low=10000000, high=100000000, size=pairwise),
-              'jitter'     : 0.3,
-              'jitter_clip': 0.05,
-              'jitter_unit': 5,
-              }
+    # 基于指定延迟级别配置延迟模型
+    model_args = {'connected'  : True,
+                  'min_latency': np.full(pairwise, latency_level * 1000000),  # 转换为纳秒
+                  'jitter'     : 0.1,
+                  'jitter_clip': 0.05,
+                  'jitter_unit': 1,
+                  }
 
-latency_model = LatencyModel(latency_model='cubic',
-                             random_state=latency_rstate,
-                             kwargs=model_args)
+    latency_model = LatencyModel(latency_model='cubic',
+                                 random_state=latency_rstate,
+                                 kwargs=model_args)
 
-###############################################
-manages = list()
-for m in range(1, args.manage_number + 1):
-    manages.append(Manage(id=m,
-                          name=f"manage_{m}",
-                          type=None, ))
-# Start the kernel running.
-results = kernel.runner(agents=agents,
-                        manages=manages,
-                        startTime=kernelStartTime,
-                        stopTime=kernelStopTime,
-                        agentLatencyModel=latency_model,
-                        defaultComputationDelay=defaultComputationDelay,
-                        skip_log=skip_log,
-                        d_final_sum=args.d_final_sum,
-                        e_final_sum=args.e_final_sum,
-                        log_dir=log_dir)
+    ###############################################
+    manages = list()
+    for m in range(1, args.manage_number + 1):
+        manages.append(Manage(id=m,
+                              name=f"manage_{m}",
+                              type=None, ))
+
+    # Start the kernel running.
+    results = kernel.runner(agents=agents,
+                            manages=manages,
+                            startTime=kernelStartTime,
+                            stopTime=kernelStopTime,
+                            agentLatencyModel=latency_model,
+                            defaultComputationDelay=defaultComputationDelay,
+                            skip_log=skip_log,
+                            d_final_sum=args.d_final_sum,
+                            e_final_sum=args.e_final_sum,
+                            log_dir=log_dir)
+
+    # 返回延迟测试结果
+    return results
+
+
+# 执行延迟测试
+if args.latency_test:
+    if args.latency_test_multiple:
+        # 测试多个延迟级别
+        all_results = {}
+        for level in args.latency_levels:
+            results = run_latency_test(level)
+            all_results[level] = results
+
+            # 记录延迟对准确率的影响
+            if 'agent_state' in results and 0 in results['agent_state']:
+                server_state = results['agent_state'][0]
+                if 'accuracy' in server_state:
+                    if not hasattr(kernel, 'latency_test_results'):
+                        kernel.latency_test_results = {}
+                    kernel.latency_test_results.setdefault('accuracy_by_latency', {})[level] = server_state['accuracy']
+
+        # 打印多级别延迟测试结果
+        print("\n=== Latency Test Results for Multiple Levels ===")
+        for level, results in all_results.items():
+            print(f"\n--- Latency Level: {level} ms ---")
+            print(f"Service Agent mean time per iteration:")
+            print(f"    Report step:         {results['srv_report']}")
+            print(f"    Crosscheck step:     {results['srv_crosscheck']}")
+            print(f"    Reconstruction step: {results['srv_reconstruction']}")
+
+            print(f"\nClient Agent mean time per iteration:")
+            print(f"    Report step:         {results['clt_report'] / num_clients}")
+            print(f"    Crosscheck step:     {results['clt_crosscheck'] / param.committee_size}")
+            print(f"    Reconstruction step: {results['clt_reconstruction'] / param.committee_size}")
+
+            if hasattr(kernel, 'latency_test_results') and hasattr(kernel.latency_test_results, 'avg_latency'):
+                print(f"\nAverage Message Latency: {kernel.latency_test_results['avg_latency']:.2f} ms")
+    else:
+        # 测试单个延迟级别
+        results = run_latency_test(args.latency_level)
+
+        print("\n=== Latency Test Results ===")
+        print(f"Service Agent mean time per iteration:")
+        print(f"    Report step:         {results['srv_report']}")
+        print(f"    Crosscheck step:     {results['srv_crosscheck']}")
+        print(f"    Reconstruction step: {results['srv_reconstruction']}")
+
+        print(f"\nClient Agent mean time per iteration:")
+        print(f"    Report step:         {results['clt_report'] / num_clients}")
+        print(f"    Crosscheck step:     {results['clt_crosscheck'] / param.committee_size}")
+        print(f"    Reconstruction step: {results['clt_reconstruction'] / param.committee_size}")
+
+        if hasattr(kernel, 'latency_test_results') and hasattr(kernel.latency_test_results, 'avg_latency'):
+            print(f"\nAverage Message Latency: {kernel.latency_test_results['avg_latency']:.2f} ms")
+else:
+    # 不进行延迟测试，正常运行
+    manages = list()
+    for m in range(1, args.manage_number + 1):
+        manages.append(Manage(id=m,
+                              name=f"manage_{m}",
+                              type=None, ))
+
+    # Start the kernel running.
+    results = kernel.runner(agents=agents,
+                            manages=manages,
+                            startTime=kernelStartTime,
+                            stopTime=kernelStopTime,
+                            defaultComputationDelay=defaultComputationDelay,
+                            skip_log=skip_log,
+                            d_final_sum=args.d_final_sum,
+                            e_final_sum=args.e_final_sum,
+                            log_dir=log_dir)
 
 # Print parameter summary and elapsed times by category for this experimental trial.
 print()
@@ -333,3 +403,22 @@ print(f"    Report step:         {results['clt_report'] / num_clients}")
 print(f"    Crosscheck step:     {results['clt_crosscheck'] / param.committee_size}")
 print(f"    Reconstruction step: {results['clt_reconstruction'] / param.committee_size}")
 print()
+
+# 修改此处的延迟测试结果输出逻辑
+if hasattr(kernel, 'latency_test_results') and hasattr(kernel.latency_test_results, 'message_latencies') and kernel.latency_test_results['message_latencies']:
+    print("\n=== Latency Test Results ===")
+    print(f"Average Message Latency: {kernel.latency_test_results['avg_latency']:.2f} ms")
+    print(f"Max Message Latency: {kernel.latency_test_results['max_latency']:.2f} ms")
+    print(f"Min Message Latency: {kernel.latency_test_results['min_latency']:.2f} ms")
+
+    if hasattr(kernel.latency_test_results, 'latency_distribution'):
+        print("\nLatency Distribution:")
+        for bucket, count in kernel.latency_test_results['latency_distribution'].items():
+            total = len(kernel.latency_test_results['message_latencies'])
+            percentage = (count / total) * 100
+            print(f"  {bucket}: {count} messages ({percentage:.2f}%)")
+
+    if hasattr(kernel.latency_test_results, 'accuracy_by_latency'):
+        print("\nAccuracy by Latency Level:")
+        for level, acc in kernel.latency_test_results['accuracy_by_latency'].items():
+            print(f"  Latency Level {level}ms: Accuracy = {acc:.4f}")

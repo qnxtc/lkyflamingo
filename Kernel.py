@@ -19,6 +19,20 @@ class Kernel:
         self.name = kernel_name
         self.random_state = random_state
 
+        # 添加延迟测试相关变量，以上为新代码
+        self.latency_test_results = {
+            'latency_settings' : {},  # 记录当前延迟设置
+            'message_latencies': [],  # 记录每条消息的延迟
+            'avg_latency'      : 0,  # 平均延迟
+            'max_latency'      : 0,  # 最大延迟
+            'min_latency'      : float('inf'),  # 最小延迟
+            'latency_impact'   : {}  # 延迟对其他指标的影响
+        }
+        # 添加延迟测试相关变量，以上为新代码
+
+
+
+
         if not random_state:
             raise ValueError("A valid, seeded np.random.RandomState object is required " +
                              "for the Kernel", self.name)
@@ -63,7 +77,9 @@ class Kernel:
                num_simulations=1, defaultComputationDelay=1,
                defaultLatency=1, agentLatency=None, latencyNoise=[1.0],
                agentLatencyModel=None, skip_log=False,
-               seed=None, oracle=None, log_dir=None, e_final_sum=False, d_final_sum=False):
+               seed=None, oracle=None, log_dir=None, e_final_sum=False, d_final_sum=False,
+               # 新增延迟测试参数
+               latency_test=False, latency_levels=[1, 10, 100, 1000] ):
 
         # agents must be a list of agents for the simulation,
         #        based on class agent.Agent
@@ -160,6 +176,16 @@ class Kernel:
         # over to future wakeup/receiveMessage calls.  It is useful for
         # staggering of sent messages.
         self.currentAgentAdditionalDelay = 0
+
+        # 记录延迟设置
+        self.latency_test_results['latency_settings'] = {
+            'defaultLatency': defaultLatency,
+            'agentLatency'  : agentLatency,
+            'latencyNoise'  : latencyNoise,
+            'latency_test'  : latency_test,
+            'latency_levels': latency_levels
+        }
+        # 记录延迟设置
 
         log_print("Kernel started: {}", self.name)
         log_print("Simulation started!")
@@ -424,6 +450,49 @@ class Kernel:
         log_print("Sent time: {}, current time {}, computation delay {}", sentTime, self.currentTime,
                   self.agentComputationDelays[sender])
         log_print("Message queued: {}", msg)
+        # 记录消息发送时间
+        send_time = pd.Timestamp('now')
+
+        # Apply communication delay per the agentLatencyModel, if defined, or the
+        # agentLatency matrix [sender][recipient] otherwise.
+        if self.agentLatencyModel is not None:
+            latency = self.agentLatencyModel.get_latency(sender_id=sender, recipient_id=recipient)
+            deliverAt = sentTime + pd.Timedelta(latency)
+
+            # Log time-in-flight if tagged.
+            if tag: self.custom_state[tag] = self.custom_state.get(tag, pd.Timedelta(0)) + pd.Timedelta(latency)
+
+            log_print(
+                "Kernel applied latency {}, accumulated delay {}, one-time delay {} on sendMessage from: {} to {}, scheduled for {}",
+                latency, self.currentAgentAdditionalDelay, delay, self.agents[sender].name, self.agents[recipient].name,
+                self.fmtTime(deliverAt))
+        else:
+            latency = self.agentLatency[sender][recipient]
+            noise = self.random_state.choice(len(self.latencyNoise), 1, self.latencyNoise)[0]
+            deliverAt = sentTime + pd.Timedelta(latency + noise)
+            log_print(
+                "Kernel applied latency {}, noise {}, accumulated delay {}, one-time delay {} on sendMessage from: {} to {}, scheduled for {}",
+                latency, noise, self.currentAgentAdditionalDelay, delay, self.agents[sender].name,
+                self.agents[recipient].name,
+                self.fmtTime(deliverAt))
+
+        # 记录消息延迟信息
+        message_latency = {
+            'sender'   : sender,
+            'recipient': recipient,
+            'send_time': send_time,
+            'deliverAt': deliverAt,
+            'latency'  : (deliverAt - sentTime).total_seconds() * 1000  # 转换为毫秒
+        }
+        self.latency_test_results['message_latencies'].append(message_latency)
+
+        # 更新最大/最小/平均延迟
+        self.latency_test_results['max_latency'] = max(self.latency_test_results['max_latency'],
+                                                       message_latency['latency'])
+        self.latency_test_results['min_latency'] = min(self.latency_test_results['min_latency'],
+                                                       message_latency['latency'])
+        # 记录消息发送时间
+
 
     def setWakeup(self, sender=None, requestedTime=None):
         # Called by an agent to receive a "wakeup call" from the kernel
@@ -555,6 +624,44 @@ class Kernel:
         dfLog = pd.DataFrame(self.summaryLog)
 
         dfLog.to_pickle(os.path.join(path, file), compression='bz2')
+
+        # 添加延迟测试结果到summary log
+        if self.latency_test_results['message_latencies']:
+            total_latency = sum(m['latency'] for m in self.latency_test_results['message_latencies'])
+            self.latency_test_results['avg_latency'] = total_latency / len(
+                self.latency_test_results['message_latencies'])
+
+            # 计算延迟分布
+            latency_distribution = {
+                '0-10ms'   : 0,
+                '10-50ms'  : 0,
+                '50-100ms' : 0,
+                '100-500ms': 0,
+                '500ms+'   : 0
+            }
+            for m in self.latency_test_results['message_latencies']:
+                if m['latency'] <= 10:
+                    latency_distribution['0-10ms'] += 1
+                elif m['latency'] <= 50:
+                    latency_distribution['10-50ms'] += 1
+                elif m['latency'] <= 100:
+                    latency_distribution['50-100ms'] += 1
+                elif m['latency'] <= 500:
+                    latency_distribution['100-500ms'] += 1
+                else:
+                    latency_distribution['500ms+'] += 1
+
+            self.latency_test_results['latency_distribution'] = latency_distribution
+
+            # 将延迟测试结果添加到summary log
+            self.summaryLog.append({
+                'AgentID'      : 'SYSTEM',
+                'AgentStrategy': 'LATENCY_TEST',
+                'EventType'    : 'LATENCY_SUMMARY',
+                'Event'        : self.latency_test_results
+            })
+            # 添加延迟测试结果到summary log
+
 
     def updateAgentState(self, agent_id, state):
         """ Called by an agent that wishes to replace its custom state in the dictionary
@@ -726,6 +833,40 @@ class Kernel:
         self.file_write(f"score：{self.SCORE}\n")
         self.file_write(f"loss rate：{1 - self.SCORE}\n")
         self.file_write(f"finished iteration：{self.finished_iteration}\n\n")
+        # 添加延迟测试结果到日志文件
+        if hasattr(self, 'latency_test_results') and self.latency_test_results['message_latencies']:
+            self.file_write("\n\n=== LATENCY TEST RESULTS ===\n")
+            self.file_write(f"Average Latency: {self.latency_test_results['avg_latency']:.2f} ms\n")
+            self.file_write(f"Max Latency: {self.latency_test_results['max_latency']:.2f} ms\n")
+            self.file_write(f"Min Latency: {self.latency_test_results['min_latency']:.2f} ms\n")
+
+            # 检查 latency_distribution 是否存在
+            if 'latency_distribution' in self.latency_test_results:
+                self.file_write("\nLatency Distribution:\n")
+                for bucket, count in self.latency_test_results['latency_distribution'].items():
+                    self.file_write(
+                        f"  {bucket}: {count} messages ({count / len(self.latency_test_results['message_latencies']) * 100:.2f}%)\n")
+            else:
+                self.file_write("\nLatency Distribution: Not available yet\n")
+
+            # 如果进行了多组延迟测试，记录延迟对准确率的影响
+            if 'accuracy_by_latency' in self.latency_test_results:
+                self.file_write("\nAccuracy by Latency Level:\n")
+                for level, acc in self.latency_test_results['accuracy_by_latency'].items():
+                    self.file_write(f"  Latency Level {level}: Accuracy = {acc:.4f}\n")
+
+                # 记录延迟与其他指标的相关性
+                if 'latency_impact' in self.latency_test_results:
+                    self.file_write("\nLatency Impact on Other Metrics:\n")
+                    for metric, value in self.latency_test_results['latency_impact'].items():
+                        self.file_write(f"  {metric}: {value}\n")
+
+    # 添加延迟测试结果到日志文件
+
+
+
+
+
 
     def finish_score(self, score, PRO_len, iterations, finished_iteration):
         self.SCORE = score
