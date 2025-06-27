@@ -1,8 +1,10 @@
 import logging
 import multiprocessing
+import os
 import pickle
 import time
 from copy import deepcopy
+from datetime import datetime
 
 import dill
 import numpy as np
@@ -103,10 +105,10 @@ class SA_ServiceAgent(Agent):
         # parallel
         self.parallel_mode = parallel_mode
 
-        # system  
+        # system
         self.msg_fwd_delay = msg_fwd_delay  # time to forward a peer-to-peer client relay message
         self.round_time = round_time  # default waiting time per round
-        self.no_of_iterations = iterations  # number of iterations 
+        self.no_of_iterations = iterations  # number of iterations
 
         """ Read keys. """
         # server (sk, pk)
@@ -203,6 +205,16 @@ class SA_ServiceAgent(Agent):
         super().kernelStarting(startTime)
 
     def kernelStopping(self):
+        # 添加丢包相关统计
+        if hasattr(self.kernel, 'packet_loss_log'):
+            loss_count = len(self.kernel.packet_loss_log)
+            total_msgs = getattr(self.kernel, 'total_messages_sent', 0) + loss_count
+            loss_rate = loss_count / total_msgs if total_msgs > 0 else 0
+
+            self.kernel.custom_state['packet_loss_count'] = loss_count
+            self.kernel.custom_state['packet_loss_rate'] = loss_rate
+            self.kernel.custom_state['packet_loss_impact'] = getattr(self.kernel, 'packet_loss_impact', 0)
+
         # Add the server time components to the custom state in the Kernel, for output to the config.
         # Note that times which should be reported in the mean per iteration are already so computed.
         self.kernel.custom_state['srv_report'] += (
@@ -211,6 +223,9 @@ class SA_ServiceAgent(Agent):
                 self.elapsed_time['CROSSCHECK'] / self.no_of_iterations)
         self.kernel.custom_state['srv_reconstruction'] += (
                 self.elapsed_time['RECONSTRUCTION'] / self.no_of_iterations)
+
+        # 生成详细的测试结果文档
+        self._generate_test_results_document()
 
         # Allow the base class to perform stopping activities.
         super().kernelStopping()
@@ -356,7 +371,7 @@ class SA_ServiceAgent(Agent):
         self.mi_cipher = self.recv_mi_cipher
         self.recv_mi_cipher = {}
 
-        # for each client, a list of encrypted pairwise secrets 
+        # for each client, a list of encrypted pairwise secrets
         self.pairwise_cipher = self.recv_pairwise_cipher
         self.recv_pairwise_cipher = {}
 
@@ -413,7 +428,7 @@ class SA_ServiceAgent(Agent):
         for id in offline_set:
             # TODO OPTMIZATION: store neighbors to reduce time
             # find neighbors for client id
-            # client id is from 1 
+            # client id is from 1
             clt_neighbors_list = param.findNeighbors(param.root_seed, self.current_iteration, self.num_clients, id,
                                                      self.neighborhood_size)
 
@@ -520,6 +535,12 @@ class SA_ServiceAgent(Agent):
                 tmp_msg_pairwise[i][j] = (
                     int((self.recv_committee_shares_pairwise[i][j]).x),
                     int(self.recv_committee_shares_pairwise[i][j].y))
+        # 记录丢包对模型聚合的影响
+        if hasattr(self.kernel, 'packet_loss_log'):
+            loss_count = len(self.kernel.packet_loss_log)
+            self.kernel.custom_state['packet_loss_count'] = loss_count
+            self.kernel.custom_state['packet_loss_rate_impact'] = loss_count / (
+                    len(self.user_vectors) * self.kernel.manage_number) if self.kernel.manage_number > 0 else 0
 
         if __debug__:
             self.logger.info(
@@ -735,6 +756,17 @@ class SA_ServiceAgent(Agent):
         start_time = time.time()
         # all_clients_pro = self.kernel.verify()
         line_clients_pro = self.kernel.again_verify(self.ids)
+        #新增代码
+        # 添加错误检查
+        if line_clients_pro is None:
+            print("[Server] Warning: again_verify() returned None. Using empty list instead.")
+            line_clients_pro = []
+        elif not hasattr(line_clients_pro, '__iter__'):
+            print(f"[Server] Error: again_verify() returned non-iterable type: {type(line_clients_pro)}")
+            line_clients_pro = []
+        #新增代码
+
+
         # PRO = np.sum([list(line_clients_pro.values()),], axis=1).reshape(80000,)
         PRO = np.zeros(self.vector_len, dtype="uint32")
         for i in line_clients_pro:
@@ -785,9 +817,43 @@ class SA_ServiceAgent(Agent):
 
         self.setWakeup(currentTime + server_comp_delay + param.wt_flamingo_report)
 
-    # ======================== UTIL ========================
-
+    # 添加缺失的方法
     def recordTime(self, startTime, categoryName):
         # Accumulate into time log.
         dt_protocol_end = pd.Timestamp('now')
         self.elapsed_time[categoryName] += dt_protocol_end - startTime
+
+    # 生成测试结果文档
+    def _generate_test_results_document(self):
+        """生成包含丢包和带宽结果的测试文档"""
+        import os
+        from datetime import datetime
+
+        # 创建结果目录
+        results_dir = "test_results"
+        os.makedirs(results_dir, exist_ok=True)
+
+        # 生成文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"test_results_{timestamp}.txt"
+        file_path = os.path.join(results_dir, filename)
+
+        # 从Kernel获取带宽和丢包统计
+        kernel_stats = None
+        for entry in self.kernel.summaryLog:
+            if entry['EventType'] == 'BandwidthSummary':
+                kernel_stats = entry['Event']
+                break
+
+        # 写入结果文档
+        with open(file_path, 'w') as f:
+            f.write("=" * 50 + "\n")
+            f.write("  FLAMINGO TEST RESULTS DOCUMENT\n")
+            f.write("=" * 50 + "\n\n")
+
+            # 基本配置
+            f.write(f"Test Timestamp: {timestamp}\n")
+            f.write(f"Number of Clients: {self.num_clients}\n")
+            f.write(f"Number of Iterations: {self.no_of_iterations}\n")
+            f.write(f"Packet Loss Rate: {self.kernel.packet_loss_rate * 100}%\n")
+            f.write(f"Neighborhood Size: {self.neighborhood_size}\n\n")

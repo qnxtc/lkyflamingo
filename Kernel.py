@@ -6,7 +6,6 @@ import time
 import numpy as np
 import pandas as pd
 
-###############################################
 from agent.flamingo.SA_ClientAgent import SA_ClientAgent as Client
 from message.Message import MessageType
 from util.util import log_print
@@ -14,10 +13,17 @@ from util.util import log_print
 
 class Kernel:
 
-    def __init__(self, kernel_name, random_state=None):
+    def __init__(self, kernel_name, random_state=None, packet_loss_rate=0.0, manage_number=0):
         # kernel_name is for human readers only.
         self.name = kernel_name
         self.random_state = random_state
+        self.packet_loss_rate = packet_loss_rate  # 丢包率，范围0.0-1.0
+        self.manage_number = manage_number  # 管理节点数量
+
+        # 新增：带宽统计
+        self.total_bytes_sent = 0
+        self.total_bytes_dropped = 0
+        self.message_size_log = []  # 记录每条消息的大小
 
         if not random_state:
             raise ValueError("A valid, seeded np.random.RandomState object is required " +
@@ -50,11 +56,10 @@ class Kernel:
 
         log_print("Kernel initialized: {}", self.name)
 
-        ###############################################
-        # self.prove_queue = queue.Queue()
-
     def __del__(self):
-        self.dir_log_file.close()
+        # 修复：添加文件存在检查
+        if hasattr(self, 'dir_log_file') and not self.dir_log_file.closed:
+            self.dir_log_file.close()
 
     # This is called to actually start the simulation, once all agent
     # configuration is done.
@@ -296,9 +301,10 @@ class Kernel:
                               agent, self.fmtTime(self.currentTime), self.fmtTime(self.agentCurrentTimes[agent]))
 
                 else:
+                    # 修复：修正错误的引用
                     raise ValueError("Unknown message type found in queue",
                                      "currentTime:", self.currentTime,
-                                     "messageType:", self.msg.type)
+                                     "messageType:", msg_type)
 
             if self.messages.empty():
                 log_print("\n--- Kernel Event Queue empty ---")
@@ -379,6 +385,38 @@ class Kernel:
                              "sender:", sender, "recipient:", recipient,
                              "msg:", msg)
 
+        # 计算消息大小
+        message_size = self._estimate_message_size(msg)
+        self.total_bytes_sent += message_size
+
+        # 模拟丢包 - 必须在消息入队之前检查
+        if self.random_state.random() < self.packet_loss_rate:
+            # 记录丢包事件和大小
+            self.total_bytes_dropped += message_size
+            self.message_size_log.append({
+                'time'      : self.currentTime,
+                'sender'    : sender,
+                'recipient' : recipient,
+                'size_bytes': message_size,
+                'status'    : 'dropped'
+            })
+
+            # 记录丢包事件
+            log_print(f"Message from {sender} to {recipient} dropped due to packet loss")
+            self.record_packet_loss(sender, recipient, msg)
+            # 更新发送计数
+            self.total_messages_sent = getattr(self, 'total_messages_sent', 0) + 1
+            return  # 消息被丢弃，不放入消息队列
+
+        # 记录成功发送的消息
+        self.message_size_log.append({
+            'time'      : self.currentTime,
+            'sender'    : sender,
+            'recipient' : recipient,
+            'size_bytes': message_size,
+            'status'    : 'sent'
+        })
+
         # Apply the agent's current computation delay to effectively "send" the message
         # at the END of the agent's current computation period when it is done "thinking".
         # NOTE: sending multiple messages on a single wake will transmit all at the same
@@ -421,9 +459,49 @@ class Kernel:
         # Finally drop the message in the queue with priority == delivery time.
         self.messages.put((deliverAt, (recipient, MessageType.MESSAGE, msg)))
 
+        # 更新发送计数
+        self.total_messages_sent = getattr(self, 'total_messages_sent', 0) + 1
+
         log_print("Sent time: {}, current time {}, computation delay {}", sentTime, self.currentTime,
                   self.agentComputationDelays[sender])
         log_print("Message queued: {}", msg)
+
+    def _estimate_message_size(self, msg):
+        """估计消息大小（字节）"""
+        try:
+            # 如果消息有size属性，直接使用
+            if hasattr(msg, 'size'):
+                return msg.size
+
+            # 如果消息是可序列化的，估计其序列化后的大小
+            import sys
+            if hasattr(msg, '__dict__'):
+                # 对于类对象，递归计算其属性大小
+                size = sys.getsizeof(msg)
+                for attr in msg.__dict__:
+                    size += sys.getsizeof(msg.__dict__[attr])
+                return size
+
+            # 对于基本类型，使用sys.getsizeof
+            return sys.getsizeof(msg)
+
+        except Exception as e:
+            # 如果无法计算，返回默认值
+            print(f"Warning: unable to estimate message size, using default. Error: {e}")
+            return 1024  # 默认1KB
+
+    def record_packet_loss(self, sender, recipient, msg):
+        """记录丢包事件，用于后续分析"""
+        if not hasattr(self, 'packet_loss_log'):
+            self.packet_loss_log = []
+        self.packet_loss_log.append({
+            'time'       : self.currentTime,
+            'sender'     : sender,
+            'recipient'  : recipient,
+            'msg_type'   : type(msg).__name__,
+            'msg_content': str(msg),
+            'size_bytes' : self._estimate_message_size(msg)  # 新增：记录丢包消息大小
+        })
 
     def setWakeup(self, sender=None, requestedTime=None):
         # Called by an agent to receive a "wakeup call" from the kernel
@@ -434,7 +512,8 @@ class Kernel:
         # kernel will not supply any parameters to the wakeup() call.
 
         if requestedTime is None:
-            requestedTime = self.currentTime + pd.TimeDelta(1)
+            # 修复：修正拼写错误
+            requestedTime = self.currentTime + pd.Timedelta(1)
 
         if sender is None:
             raise ValueError("setWakeup() called without valid sender ID",
@@ -515,15 +594,6 @@ class Kernel:
         # the log in a unique directory per run, with one filename per agent, also
         # decided by the Kernel using agent type, id, etc.
 
-        # If there are too many agents, placing all these files in a directory might
-        # be unfortunate.  Also if there are too many agents, or if the logs are too
-        # large, memory could become an issue.  In this case, we might have to take
-        # a speed hit to write logs incrementally.
-
-        # If filename is not None, it will be used as the filename.  Otherwise,
-        # the Kernel will construct a filename based on the name of the Agent
-        # requesting log archival.
-
         if self.skip_log: return
 
         path = os.path.join(".", "log", self.log_dir)
@@ -536,7 +606,11 @@ class Kernel:
         if not os.path.exists(path):
             os.makedirs(path)
 
-        dfLog.to_pickle(os.path.join(path, file), compression='bz2')
+        # 修复：添加异常处理
+        try:
+            dfLog.to_pickle(os.path.join(path, file), compression='bz2')
+        except Exception as e:
+            print(f"Error writing log file: {e}")
 
     def appendSummaryLog(self, sender, eventType, event):
         # We don't even include a timestamp, because this log is for one-time-only
@@ -552,9 +626,57 @@ class Kernel:
         if not os.path.exists(path):
             os.makedirs(path)
 
-        dfLog = pd.DataFrame(self.summaryLog)
+        # 计算带宽使用情况
+        if self.currentTime and self.startTime:
+            total_time_seconds = (self.currentTime - self.startTime).total_seconds()
+            effective_bandwidth = self.total_bytes_sent / total_time_seconds if total_time_seconds > 0 else 0
+            dropped_bandwidth = self.total_bytes_dropped / total_time_seconds if total_time_seconds > 0 else 0
+        else:
+            total_time_seconds = 0
+            effective_bandwidth = 0
+            dropped_bandwidth = 0
 
-        dfLog.to_pickle(os.path.join(path, file), compression='bz2')
+        # 添加带宽和丢包统计信息
+        self.summaryLog.append({
+            'AgentID'      : -1,  # 系统级统计
+            'AgentStrategy': 'System',
+            'EventType'    : 'BandwidthSummary',
+            'Event'        : {
+                'total_bytes_sent'                    : self.total_bytes_sent,
+                'total_bytes_dropped'                 : self.total_bytes_dropped,
+                'packet_loss_rate'                    : self.packet_loss_rate,
+                'effective_bandwidth_bytes_per_second': effective_bandwidth,
+                'dropped_bandwidth_bytes_per_second'  : dropped_bandwidth,
+                'total_messages'                      : getattr(self, 'total_messages_sent', 0),
+                'dropped_messages'                    : len(getattr(self, 'packet_loss_log', [])),
+                'total_time_seconds'                  : total_time_seconds
+            }
+        })
+
+        # 添加丢包统计信息
+        if hasattr(self, 'packet_loss_log') and self.packet_loss_log:
+            loss_count = len(self.packet_loss_log)
+            total_msgs = getattr(self, 'total_messages_sent', 0)
+            loss_rate = loss_count / total_msgs if total_msgs > 0 else 0
+
+            self.summaryLog.append({
+                'AgentID'      : -1,  # 系统级统计
+                'AgentStrategy': 'System',
+                'EventType'    : 'PacketLossSummary',
+                'Event'        : {
+                    'total_messages'  : total_msgs,
+                    'dropped_messages': loss_count,
+                    'packet_loss_rate': loss_rate,
+                    'impact_metrics'  : self.custom_state.get('packet_loss_impact', 0)
+                }
+            })
+
+        # 修复：添加异常处理
+        try:
+            dfLog = pd.DataFrame(self.summaryLog)
+            dfLog.to_pickle(os.path.join(path, file), compression='bz2')
+        except Exception as e:
+            print(f"Error writing summary log: {e}")
 
     def updateAgentState(self, agent_id, state):
         """ Called by an agent that wishes to replace its custom state in the dictionary
@@ -575,19 +697,19 @@ class Kernel:
         # called either on the class or an instance.
 
         # Try just returning the pd.Timestamp now.
-        return (simulationTime)
+        return simulationTime
 
-        ns = simulationTime
-        hr = int(ns / (1000000000 * 60 * 60))
-        ns -= (hr * 1000000000 * 60 * 60)
-        m = int(ns / (1000000000 * 60))
-        ns -= (m * 1000000000 * 60)
-        s = int(ns / 1000000000)
-        ns = int(ns - (s * 1000000000))
+        # 修复：注释掉无效代码
+        # ns = simulationTime
+        # hr = int(ns / (1000000000 * 60 * 60))
+        # ns -= (hr * 1000000000 * 60 * 60)
+        # m = int(ns / (1000000000 * 60))
+        # ns -= (m * 1000000000 * 60)
+        # s = int(ns / 1000000000)
+        # ns = int(ns - (s * 1000000000))
+        #
+        # return "{:02d}:{:02d}:{:02d}.{:09d}".format(hr, m, s, ns)
 
-        return "{:02d}:{:02d}:{:02d}.{:09d}".format(hr, m, s, ns)
-
-    ###############################################
     def findAgentsByType(self, type):
         agents = list()
         for agent in self.agents:
@@ -666,24 +788,36 @@ class Kernel:
             self.handle_T1_time[c_id].append(end - start)
 
         # 5.每个客户端生成自己的pro_c=kc+大alpha*ver_n，并将其给到服务端
-        self.clients_pro = list()
+        clients_pro = list()
         for c_id in line_clients:
             start = time.time()
-            self.clients_pro.append(self.clients_dict[c_id].count_pro_c())
+            clients_pro.append(self.clients_dict[c_id].count_pro_c())
             end = time.time()
             self.handle_T1_time[c_id].append(end - start)
 
-        for c_id, _t in self.handle_T1_time.copy().items():
+        # 记录pro_c的长度
+        for c_id, pro_c in zip(line_clients, clients_pro):
+            self.clients_pro_len[c_id] = len(pro_c) if hasattr(pro_c, '__len__') else 1
+
+        # 记录迭代次数
+        self.clients_iter_numbers += 1
+
+        # 计算每个客户端的总处理时间
+        for c_id in self.handle_T1_time.copy():
             self.handle_T1_time[c_id] = sum(self.handle_T1_time[c_id])
 
-        return self.clients_pro
+        return clients_pro
         # 6.服务端收到每个客户端的pro_c，将其相加成为PRO
         #   并将服务端生成的PRO与final_sum发送每个客户端
         # 7.每个客户端收到PRO与final_sum后，使用公式：PRO-大K-大alpha*ver_n
 
     def file_write(self, write_txt: str):
-        self.dir_log_file.write(write_txt)
-        self.dir_log_file.flush()
+        # 修复：添加异常处理
+        try:
+            self.dir_log_file.write(write_txt)
+            self.dir_log_file.flush()
+        except Exception as e:
+            print(f"Error writing to log file: {e}")
 
     def handle_log_time(self, handle_data: dict, _type: str):
         log_time = dict()
@@ -713,11 +847,15 @@ class Kernel:
         self.file_write(write_txt)
 
     def save_T2_T3_data(self):
-        self.file_write(f"Number of rounds {self.iterations}\n")
+        # 修复：添加属性检查
+        if hasattr(self, 'iterations'):
+            self.file_write(f"Number of rounds {self.iterations}\n")
+        else:
+            self.file_write(f"Number of rounds: Not available\n")
+
         self.handle_log_time(self.handle_T1_time, "T1")
         self.handle_T1_time.clear()
         self.handle_log_time(self.handle_T2_time, "T2")
-        self.handle_T2_time.clear()
         self.handle_log_time(self.handle_T3_time, "T3")
         self.handle_T3_time.clear()
         self.handle_log_time(self.clients_pro_len, "BYTE")

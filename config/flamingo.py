@@ -66,6 +66,10 @@ parser.add_argument('-fd', '--d_final_sum', action="store_true",
                     help='save final sum decode data')
 parser.add_argument('-fe', '--e_final_sum', action="store_true",
                     help='save final sum encode data')
+#新增代码
+parser.add_argument('-plr', '--packet_loss_rate', type=float, default=0.0,
+                    help='Packet loss rate (0.0-1.0)')
+#新增代码
 
 args, remaining_args = parser.parse_known_args()
 
@@ -152,7 +156,9 @@ defaultComputationDelay = 1000000000 * 0.1  # five seconds
 
 ### Configure the Kernel.
 kernel = Kernel("Base Kernel",
-                random_state=np.random.RandomState(seed=np.random.randint(low=0, high=2 ** 32, dtype='uint64')))
+                random_state=np.random.RandomState(seed=np.random.randint(low=0, high=2 ** 32, dtype='uint64')),
+                packet_loss_rate=args.packet_loss_rate, # 添加丢包率参数
+                manage_number=args.manage_number)  # 新增参数
 
 ### Obtain random state for whatever latency model will be used.
 latency_rstate = np.random.RandomState(seed=np.random.randint(low=0, high=2 ** 32, dtype='uint64'))
