@@ -549,8 +549,18 @@ class SA_ServiceAgent(Agent):
         dt_protocol_start = pd.Timestamp('now')
 
         # if not enough shares received, wait for 0.1 sec
-        if len(self.recv_committee_shares_pairwise) < self.committee_threshold:
+        wait_time = 0
+        while len(self.recv_committee_shares_pairwise) < self.committee_threshold and wait_time < 5:
             time.sleep(0.1)
+            wait_time += 0.1
+        if len(self.recv_committee_shares_pairwise) < self.committee_threshold:
+            print(
+                f"[Server] Warning: insufficient shares for decryption in round {self.current_round}. Got {len(self.recv_committee_shares_pairwise)}, need {self.committee_threshold}.")
+            self.reconstruction_success = False
+            # 可选择进行降级处理或跳过该轮
+            return
+        else:
+            self.reconstruction_success = True
 
         self.committee_shares_pairwise = self.recv_committee_shares_pairwise
         self.recv_committee_shares_pairwise = {}

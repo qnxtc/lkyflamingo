@@ -8,8 +8,8 @@ from Cryptodome.Random import get_random_bytes
 # System parameters
 vector_len = 16000
 vector_type = 'uint32'
-committee_size = 60
-fraction = 1 / 3
+committee_size = 30
+fraction = 0.1
 
 # Waiting time
 # Set according to a target dropout rate (e.g., 1%) 
